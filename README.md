@@ -20,7 +20,7 @@ Rclone is a command line tool used to sync files on your computer with cloud sto
 3. Download 2 Windows scripts `config.bat` and `sync.bat` and place them in the same folder as the exe
 4. Run config.bat and follow the interactive prompt instructions for `n) New remote`
     * Name it **gdrive**
-    * Storage - **18** (Google Drive)
+    * Storage - **17** (Google Drive)
     * Scope - **2** (Read-only access)
     * For all other options use defaults
 5. (Optional) If you want to use a different remote or local path, edit sync.bat
