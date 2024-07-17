@@ -1,4 +1,4 @@
 local_path="$(dirname "$0")/Sync Charts"
-rclone sync "gdrive:CH Charts" "$local_path" -vv --fast-list --checkers 4
+rclone copy "gdrive:CH Charts" "$local_path" -vv --fast-list
 echo "PRESS ENTER"
 read

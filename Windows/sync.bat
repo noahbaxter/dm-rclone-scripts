@@ -1,3 +1,3 @@
-.\rclone.exe sync "gdrive:CH Charts" "%~dp0/Sync Charts" -vv --fast-list --checkers 4
+.\rclone.exe copy "gdrive:CH Charts" "%~dp0/Sync Charts" -vv --fast-list
 echo PRESS ENTER
 pause
