@@ -4,7 +4,7 @@ Rclone is a command line tool used to sync files on your computer with cloud sto
 
 ## Setup
 
-1. Add shortcuts to your drive
+1. Add shortcuts to your Google Drive
    * In **My Drive**, create a folder and call it **CH Charts** (case sensitive)
    * For each drive you want to sync, go to them and click:
         1. Folder name at the top
