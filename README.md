@@ -20,8 +20,8 @@ Rclone is a command line tool used to sync files on your computer with cloud sto
 3. Download 2 Windows scripts `config.bat` and `sync.bat` and place them in the same folder as the exe
 4. Run config.bat and follow the interactive prompt instructions for `n) New remote`
     * Name it **gdrive**
-    * Storage - **18** (Google Drive)
-    * Scope - **2** (Read-only access)
+    * Storage - **Google Drive**
+    * Scope - **Read-only access**
     * For all other options use defaults
 5. (Optional) If you want to use a different remote or local path, edit sync.bat
     * Default remote path is `"gdrive:CH Charts"` and local is `"%~dp0/Sync Charts"`
@@ -32,8 +32,8 @@ Rclone is a command line tool used to sync files on your computer with cloud sto
 2. Download the MacOS scripts `config.sh` and `sync.sh` and place them wherever you store your local songs
 3. Open `config.sh` with **Terminal.app** and follow the interactive prompt instructions for `n) New remote`
     * Name it **gdrive**
-    * Storage - **18** (Google Drive)
-    * Scope - **2** (Read-only access)
+    * Storage - **Google Drive**
+    * Scope - **Read-only access**
     * For all other options use defaults
 4. (Optional) If you want to use a different remote or local path, edit sync.sh
     * Default remote path is `"gdrive:CH Charts"` and local is `"$(dirname "$0")/Sync Charts"`
@@ -67,7 +67,7 @@ The drive app has lots of issues. Sometimes files download (or update to become)
 This often happens at the beginning of a sync and just means Google Drive is being slow to respond. Leave the script alone for a couple minutes and it should start syncing properly. 
 
 #### What does %~dp0 mean? 
-This basically means the folder this script is in and should be equivalent to. for those familiar with Unix. 
+This basically means the folder this script is in and should be equivalent to . for those familiar with Unix. 
 
 #### How can I speed things up? 
 Once downloaded, syncing shouldn't take longer than 10-20 minutes but if it does, here are a couple things to try.
