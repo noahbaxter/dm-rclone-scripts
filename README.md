@@ -36,37 +36,38 @@ Rclone is a command line tool used to sync files on your computer with cloud sto
     * Scope - **Read-only access**
     * For all other options use defaults
     
-    ![](image-guide/rclone-4-1.png)
+![](image-guide/rclone-4-1.png)
 
-    ![](image-guide/rclone-4-2.png)
+![](image-guide/rclone-4-2.png)
 
-    ![](image-guide/rclone-4-3.png)
+![](image-guide/rclone-4-3.png)
 
-    ![](image-guide/rclone-4-4.png)
+![](image-guide/rclone-4-4.png)
 
-    ![](image-guide/rclone-4-5.png)
+![](image-guide/rclone-4-5.png)
 
-    ![](image-guide/rclone-4-6.png)
+![](image-guide/rclone-4-6.png)
 
-    ![](image-guide/rclone-4-7.png)
+![](image-guide/rclone-4-7.png)
 
-    ![](image-guide/rclone-4-8.png)
+![](image-guide/rclone-4-8.png)
 
-    ![](image-guide/rclone-4-9.png)
+![](image-guide/rclone-4-9.png)
 
-    ![](image-guide/rclone-4-10.png)
+![](image-guide/rclone-4-10.png)
 
-    ![](image-guide/rclone-4-11.png)
+![](image-guide/rclone-4-11.png)
 
-    ![](image-guide/rclone-4-12.png)
+![](image-guide/rclone-4-12.png)
 
-    ![](image-guide/rclone-4-13.png)
+![](image-guide/rclone-4-13.png)
 
-    ![](image-guide/rclone-4-14.png)
+![](image-guide/rclone-4-14.png)
 
-    ![](image-guide/rclone-4-15.png)
+![](image-guide/rclone-4-15.png)
 
-    ![](image-guide/rclone-4-16.png)
+![](image-guide/rclone-4-16.png)
+
 5. (Optional) If you want to use a different remote or local path, edit sync.bat
     * Default remote path is `"gdrive:CH Charts"` and local is `"%~dp0/Sync Charts"`
     * Change `CH Charts` or `Sync Charts` to `Path/To/Charts` as appropriate.
