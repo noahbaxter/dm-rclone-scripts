@@ -1,6 +1,6 @@
 # Syncing Songs with Rclone
  
-Rclone is a command line tool used to sync files on your computer with cloud storage. This is useful because it allows members of **Drummer’s Monthly** to maintain a common and up-to-date song list without relying on the broken mess that is the Google Drive desktop app. Once set up, all you'll have to do is run the attached script anytime you want to update your songs. To set this up you'll need a Google account but paying for Google Drive is not necessary. 
+Rclone is a command line tool used to sync files on your computer with cloud storage. This is useful because it allows members of **Drummer’s Monthly** to maintain a common and up-to-date song list without relying on the broken mess that is the Google Drive desktop app. Once set up, all you'll have to do is run the attached script anytime you want to update your songs. To set this up you'll need a Google account but paying for Google Drive is not necessary.
 
 ## Setup
 
