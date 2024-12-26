@@ -6,6 +6,8 @@ Rclone is a command line tool used to sync files on your computer with cloud sto
 
 1. Add shortcuts to your Google Drive
    * In **My Drive**, create a folder and call it **CH Charts** (case sensitive)
+
+   ![](image-guide/rclone-1-1.jpg)
    * For each drive you want to sync, go to them and click:
         1. Folder name at the top
         2. Organize
@@ -15,18 +17,61 @@ Rclone is a command line tool used to sync files on your computer with cloud sto
         6. **CH Charts** (case sensitive)
         7. Add
 
+    ![](image-guide/rclone-1-2.jpg)
+
+    ![](image-guide/rclone-1-3.jpg)
+    
+    ![](image-guide/rclone-1-4.jpg)
+
 #### Windows
 2. Grab the latest version of [rclone](https://rclone.org/downloads/) and place `rclone.exe` into your wherever you store your local songs
-3. Download 2 Windows scripts `config.bat` and `sync.bat` and place them in the same folder as the exe
+3. Download rclone scripts from github by clicking the large green code button. Then place `config.bat` and `sync.bat` and place them in the same folder as the exe
+
+![](image-guide/rclone-2-1.jpg)
+
+![](image-guide/rclone-2-2.png)
 4. Run config.bat and follow the interactive prompt instructions for `n) New remote`
     * Name it **gdrive**
-    * Storage - **Google Drive**
+    * Storage - **Google Drive** (note the number may differ from what is shown below)
     * Scope - **Read-only access**
     * For all other options use defaults
+    
+    ![](image-guide/rclone-4-1.png)
+
+    ![](image-guide/rclone-4-2.png)
+
+    ![](image-guide/rclone-4-3.png)
+
+    ![](image-guide/rclone-4-4.png)
+
+    ![](image-guide/rclone-4-5.png)
+
+    ![](image-guide/rclone-4-6.png)
+
+    ![](image-guide/rclone-4-7.png)
+
+    ![](image-guide/rclone-4-8.png)
+
+    ![](image-guide/rclone-4-9.png)
+
+    ![](image-guide/rclone-4-10.png)
+
+    ![](image-guide/rclone-4-11.png)
+
+    ![](image-guide/rclone-4-12.png)
+
+    ![](image-guide/rclone-4-13.png)
+
+    ![](image-guide/rclone-4-14.png)
+
+    ![](image-guide/rclone-4-15.png)
+
+    ![](image-guide/rclone-4-16.png)
 5. (Optional) If you want to use a different remote or local path, edit sync.bat
     * Default remote path is `"gdrive:CH Charts"` and local is `"%~dp0/Sync Charts"`
     * Change `CH Charts` or `Sync Charts` to `Path/To/Charts` as appropriate.
 6. Run `sync.bat` and your song folder should populate 
+![](image-guide/rclone-6-1.png)
    
 #### MacOS
 2. Download the MacOS scripts `config.sh` and `sync.sh` and place them wherever you store your local songs
