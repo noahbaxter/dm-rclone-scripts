@@ -31,10 +31,10 @@ Rclone is a command line tool used to sync files on your computer with cloud sto
 
 ![](image-guide/rclone-2-2.png)
 4. Run config.bat and follow the interactive prompt instructions for `n) New remote`
-    * Name it **gdrive**
-    * Storage - **Google Drive** (note the number may differ from what is shown below)
-    * Scope - **Read-only access**
-    * For all other options use defaults
+* Name it **gdrive**
+* Storage - **Google Drive** (note the number may differ from what is shown below)
+* Scope - **Read-only access**
+* For all other options use defaults
     
 ![](image-guide/rclone-4-1.png)
 
@@ -68,10 +68,10 @@ Rclone is a command line tool used to sync files on your computer with cloud sto
 
 ![](image-guide/rclone-4-16.png)
 
-5. (Optional) If you want to use a different remote or local path, edit sync.bat
+1. (Optional) If you want to use a different remote or local path, edit sync.bat
     * Default remote path is `"gdrive:CH Charts"` and local is `"%~dp0/Sync Charts"`
     * Change `CH Charts` or `Sync Charts` to `Path/To/Charts` as appropriate.
-6. Run `sync.bat` and your song folder should populate 
+2. Run `sync.bat` and your song folder should populate 
 ![](image-guide/rclone-6-1.png)
    
 #### MacOS
