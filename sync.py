@@ -15,15 +15,12 @@ import requests
 from src import (
     DriveClient,
     Manifest,
-    UserConfig,
     FolderSync,
     purge_extra_files,
     clear_screen,
+    print_header,
     show_main_menu,
     show_purge_menu,
-    add_custom_folder,
-    remove_custom_folder,
-    change_download_path,
 )
 from src.drive_client import DriveClientConfig
 
@@ -33,13 +30,24 @@ from src.drive_client import DriveClientConfig
 
 API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 MANIFEST_URL = "https://github.com/noahbaxter/dm-rclone-scripts/releases/download/manifest/manifest.json"
+DOWNLOAD_FOLDER = "Charts"  # Folder next to the app
+
+
+def get_app_dir() -> Path:
+    """Get the directory where the app is located."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).parent
+
+
+def get_download_path() -> Path:
+    """Get the download directory path."""
+    return get_app_dir() / DOWNLOAD_FOLDER
 
 
 def get_manifest_path() -> Path:
     """Get path to local manifest file."""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent / "manifest.json"
-    return Path(__file__).parent / "manifest.json"
+    return get_app_dir() / "manifest.json"
 
 
 def fetch_manifest() -> dict:
@@ -59,8 +67,7 @@ def fetch_manifest() -> dict:
         manifest = Manifest.load(local_path)
         return manifest.to_dict()
 
-    print("Warning: Could not load folder manifest.")
-    print("Use [C] to add folders manually.\n")
+    print("Warning: Could not load folder manifest.\n")
     return {"folders": []}
 
 
@@ -73,97 +80,71 @@ class SyncApp:
     """Main application controller."""
 
     def __init__(self):
-        self.config = UserConfig.load()
         client_config = DriveClientConfig(api_key=API_KEY)
         self.client = DriveClient(client_config)
         self.sync = FolderSync(self.client)
-        self.manifest_data = {}
+        self.folders = []
 
     def load_manifest(self):
-        """Load manifest and mark official folders."""
+        """Load manifest folders."""
         print("Fetching folder list...")
-        self.manifest_data = fetch_manifest()
-        for folder in self.manifest_data.get("folders", []):
-            folder["official"] = True
+        manifest_data = fetch_manifest()
+        self.folders = manifest_data.get("folders", [])
 
-    def get_all_folders(self) -> list:
-        """Get combined list of official and custom folders."""
-        return self.manifest_data.get("folders", []) + [
-            {
-                "name": f.name,
-                "folder_id": f.folder_id,
-                "description": f.description,
-                "official": False,
-            }
-            for f in self.config.custom_folders
-        ]
-
-    def handle_download(self, folders: list, indices: list):
+    def handle_download(self, indices: list):
         """Handle folder download."""
-        cancelled = self.sync.download_folders(folders, indices, self.config.resolve_download_path())
+        cancelled = self.sync.download_folders(self.folders, indices, get_download_path())
         if not cancelled:
             input("\nPress Enter to continue...")
 
-    def handle_purge(self, folders: list):
+    def handle_purge(self):
         """Handle purge menu."""
-        choice = show_purge_menu(folders)
+        choice = show_purge_menu(self.folders)
 
         if choice == "C":
             return
         elif choice == "A":
-            base_path = self.config.resolve_download_path()
-            for folder in folders:
-                if folder.get("official"):
-                    print(f"\n[{folder['name']}]")
-                    purge_extra_files(folder, base_path)
+            base_path = get_download_path()
+            for folder in self.folders:
+                print(f"\n[{folder['name']}]")
+                purge_extra_files(folder, base_path)
             input("\nPress Enter to continue...")
         elif choice.isdigit():
             idx = int(choice) - 1
-            if 0 <= idx < len(folders) and folders[idx].get("official"):
-                print(f"\n[{folders[idx]['name']}]")
-                purge_extra_files(folders[idx], self.config.resolve_download_path())
+            if 0 <= idx < len(self.folders):
+                print(f"\n[{self.folders[idx]['name']}]")
+                purge_extra_files(self.folders[idx], get_download_path())
                 input("\nPress Enter to continue...")
 
     def run(self):
         """Main application loop."""
         clear_screen()
+        print_header()
         self.load_manifest()
 
         while True:
-            clear_screen()
-
-            all_folders = self.get_all_folders()
-
-            if not all_folders:
+            if not self.folders:
+                clear_screen()
+                print_header()
                 print("No folders available!")
-                print("Use [C] to add a custom folder.")
                 print()
 
-            choice = show_main_menu(all_folders, self.config)
+            choice = show_main_menu(self.folders)
 
             if choice == "Q":
                 print("\nGoodbye!")
                 break
 
-            elif choice == "A" and all_folders:
-                self.handle_download(all_folders, list(range(len(all_folders))))
+            elif choice == "A" and self.folders:
+                self.handle_download(list(range(len(self.folders))))
 
             elif choice == "X":
-                self.handle_purge(all_folders)
-
-            elif choice == "C":
-                add_custom_folder(self.config, self.client)
-
-            elif choice == "R":
-                remove_custom_folder(self.config)
-
-            elif choice == "P":
-                change_download_path(self.config)
+                self.handle_purge()
 
             elif choice.isdigit():
                 idx = int(choice) - 1
-                if 0 <= idx < len(all_folders):
-                    self.handle_download(all_folders, [idx])
+                if 0 <= idx < len(self.folders):
+                    self.handle_download([idx])
                 else:
                     print("Invalid selection")
                     input("Press Enter to continue...")
@@ -172,9 +153,9 @@ class SyncApp:
                 # Handle comma-separated selections
                 try:
                     indices = [int(x.strip()) - 1 for x in choice.split(",")]
-                    valid_indices = [i for i in indices if 0 <= i < len(all_folders)]
+                    valid_indices = [i for i in indices if 0 <= i < len(self.folders)]
                     if valid_indices:
-                        self.handle_download(all_folders, valid_indices)
+                        self.handle_download(valid_indices)
                     else:
                         print("Invalid selection")
                         input("Press Enter to continue...")

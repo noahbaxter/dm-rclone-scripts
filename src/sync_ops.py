@@ -39,8 +39,8 @@ class FolderSync:
             scan_time = time.time() - scan_start
             print(f"  Comparison completed in {format_duration(scan_time)} (0 API calls)")
         else:
-            # Custom folder - need to scan
-            print(f"  Scanning folder (custom folder, not in manifest)...")
+            # No manifest - need to scan (shouldn't happen with official folders)
+            print(f"  Scanning folder...")
             scanner = FolderScanner(self.client)
 
             def progress(folders, files, shortcuts):
@@ -128,11 +128,11 @@ class FolderSync:
         print(f"  Total errors: {total_errors}")
         print("=" * 50)
 
-        # Check for extra files (only for official folders with manifests)
+        # Check for extra files (only for folders with manifests)
         all_extras = []
         for idx in indices:
             folder = folders[idx]
-            if folder.get("official") and folder.get("files"):
+            if folder.get("files"):
                 extras = find_extra_files(folder, download_path)
                 all_extras.extend(extras)
 
