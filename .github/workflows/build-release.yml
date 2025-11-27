@@ -1,0 +1,134 @@
+name: Build Release
+
+on:
+  # Trigger on version tags
+  push:
+    tags:
+      - 'v*'
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v2.0.0)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            name: macos
+            artifact: dm-sync-macos
+          - os: windows-latest
+            name: windows
+            artifact: dm-sync.exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Inject API key for build
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: |
+          # Replace the env var lookup with the actual key for the build
+          if [ "${{ matrix.name }}" = "windows" ]; then
+            sed -i 's/os.environ.get("GOOGLE_API_KEY", "")/"'"$GOOGLE_API_KEY"'"/' sync.py
+          else
+            sed -i '' 's/os.environ.get("GOOGLE_API_KEY", "")/"'"$GOOGLE_API_KEY"'"/' sync.py
+          fi
+        shell: bash
+
+      - name: Build executable (macOS)
+        if: matrix.name == 'macos'
+        run: |
+          pyinstaller --onefile --name dm-sync-macos --clean --noconfirm sync.py
+
+      - name: Build executable (Windows)
+        if: matrix.name == 'windows'
+        run: |
+          pyinstaller --onefile --name dm-sync --clean --noconfirm sync.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          elif [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=v$(date +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Prepare release notes
+          cat << 'EOF' > notes.md
+          ## DM Chart Sync ${{ steps.version.outputs.version }}
+
+          ### Downloads
+          - **Windows**: `dm-sync.exe`
+          - **macOS**: `dm-sync-macos` (run `chmod +x dm-sync-macos` after downloading)
+
+          ### Features
+          - Zero-setup chart downloads from Google Drive
+          - Smart sync (only downloads new/changed files)
+          - Pause/Stop with ESC key
+          - Charter filtering (choose which charters to sync)
+          - Custom download paths
+          - Parallel downloads
+          EOF
+
+          # Create or update release
+          gh release view "$VERSION" && gh release delete "$VERSION" --yes || true
+          gh release create "$VERSION" \
+            --title "DM Chart Sync $VERSION" \
+            --notes-file notes.md \
+            artifacts/dm-sync-macos/dm-sync-macos \
+            artifacts/dm-sync.exe/dm-sync.exe
+
+      - name: Summary
+        run: |
+          echo "### Release Created" >> $GITHUB_STEP_SUMMARY
+          echo "- Version: ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- macOS: dm-sync-macos" >> $GITHUB_STEP_SUMMARY
+          echo "- Windows: dm-sync.exe" >> $GITHUB_STEP_SUMMARY

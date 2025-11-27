@@ -20,3 +20,10 @@ manifest.json
 # IDE
 .vscode/
 .idea/
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+dm-sync-macos
+dm-sync.exe
