@@ -15,11 +15,16 @@ def clear_screen():
     os.system("cls" if os.name == "nt" else "clear")
 
 
-def show_main_menu(folders: list) -> str:
+def show_main_menu(folders: list, selected_index: int = 0) -> tuple[str, int]:
     """
     Show main menu and get user selection.
 
-    Returns selection string (hotkey value), or "Q" if ESC pressed.
+    Args:
+        folders: List of folder dicts
+        selected_index: Index to start selection at
+
+    Returns:
+        Tuple of (selection string, new selected index)
     """
     menu = Menu(title="Available chart packs:")
 
@@ -46,9 +51,9 @@ def show_main_menu(folders: list) -> str:
     menu.add_item(MenuDivider())
     menu.add_item(MenuItem("Quit", hotkey="Q", value="Q"))
 
-    result = menu.run()
+    result, new_index = menu.run(selected_index)
     if result is None:
-        return "Q"  # ESC = quit from main menu
-    return result.value
+        return "Q", new_index  # ESC = quit from main menu
+    return result.value, new_index
 
 

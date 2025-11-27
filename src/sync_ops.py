@@ -80,12 +80,8 @@ class FolderSync:
 
         return downloaded, skipped, errors, cancelled
 
-    def download_folders(self, folders: list, indices: list, download_path: Path) -> bool:
-        """
-        Download selected folders.
-
-        Returns True if cancelled by user, False otherwise.
-        """
+    def download_folders(self, folders: list, indices: list, download_path: Path):
+        """Download selected folders."""
         print()
         print("=" * 50)
         print("Starting download...")
@@ -118,7 +114,7 @@ class FolderSync:
             print(f"  Downloaded: {downloaded}, Skipped: {skipped}, Errors: {errors}")
 
         if was_cancelled:
-            return True
+            return
 
         print()
         print("=" * 50)
@@ -128,34 +124,8 @@ class FolderSync:
         print(f"  Total errors: {total_errors}")
         print("=" * 50)
 
-        # Check for extra files (only for folders with manifests)
-        all_extras = []
-        for idx in indices:
-            folder = folders[idx]
-            if folder.get("files"):
-                extras = find_extra_files(folder, download_path)
-                all_extras.extend(extras)
-
-        if all_extras:
-            total_extra_size = sum(size for _, size in all_extras)
-            print()
-            print(f"Found {len(all_extras)} local files not in manifest ({format_size(total_extra_size)})")
-            print()
-
-            # Show tree structure
-            tree_lines = format_extras_tree(all_extras, download_path)
-            for line in tree_lines[:10]:
-                print(line)
-            if len(tree_lines) > 10:
-                print(f"  ... and {len(tree_lines) - 10} more folders")
-
-            print()
-            confirm = input("Remove these files? [y/N]: ").strip().lower()
-            if confirm == "y":
-                deleted = delete_files(all_extras, download_path)
-                print(f"Removed {deleted} files ({format_size(total_extra_size)})")
-
-        return False
+        # Auto-dismiss after 2 seconds
+        time.sleep(2)
 
 
 def format_extras_tree(files: list, base_path: Path) -> list[str]:

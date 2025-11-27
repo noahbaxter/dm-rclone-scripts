@@ -92,9 +92,7 @@ class SyncApp:
 
     def handle_download(self, indices: list):
         """Handle folder download."""
-        cancelled = self.sync.download_folders(self.folders, indices, get_download_path())
-        if not cancelled:
-            input("\nPress Enter to continue...")
+        self.sync.download_folders(self.folders, indices, get_download_path())
 
     def handle_purge(self):
         """Purge extra files from all folders."""
@@ -106,6 +104,8 @@ class SyncApp:
         print_header()
         self.load_manifest()
 
+        selected_index = 0  # Track menu cursor position
+
         while True:
             if not self.folders:
                 clear_screen()
@@ -113,7 +113,7 @@ class SyncApp:
                 print("No folders available!")
                 print()
 
-            choice = show_main_menu(self.folders)
+            choice, selected_index = show_main_menu(self.folders, selected_index)
 
             if choice == "Q":
                 print("\nGoodbye!")
@@ -129,23 +129,6 @@ class SyncApp:
                 idx = int(choice) - 1
                 if 0 <= idx < len(self.folders):
                     self.handle_download([idx])
-                else:
-                    print("Invalid selection")
-                    input("Press Enter to continue...")
-
-            else:
-                # Handle comma-separated selections
-                try:
-                    indices = [int(x.strip()) - 1 for x in choice.split(",")]
-                    valid_indices = [i for i in indices if 0 <= i < len(self.folders)]
-                    if valid_indices:
-                        self.handle_download(valid_indices)
-                    else:
-                        print("Invalid selection")
-                        input("Press Enter to continue...")
-                except ValueError:
-                    print("Invalid selection")
-                    input("Press Enter to continue...")
 
 
 def main():
