@@ -238,8 +238,18 @@ class Manifest:
                 lookup[fid] = (fi, fli)
         return lookup
 
-    def print_tree(self):
-        """Print a tree view of manifest contents."""
+    def print_tree(self, sort_by: str = "charts"):
+        """
+        Print a tree view of manifest contents.
+
+        Args:
+            sort_by: Sort order - "charts", "size", or "name"
+        """
+        try:
+            from .colors import Colors
+        except ImportError:
+            from colors import Colors
+
         def format_size(size_bytes: int) -> str:
             if size_bytes < 1024:
                 return f"{size_bytes}B"
@@ -250,29 +260,44 @@ class Manifest:
             else:
                 return f"{size_bytes / (1024 * 1024 * 1024):.1f}GB"
 
+        def get_sort_key(item, is_folder=False):
+            if is_folder:
+                charts = item.charts or {}
+                chart_count = charts.get("total", item.chart_count)
+                size = item.total_size
+                name = item.name
+            else:
+                chart_count = item.get("charts", {}).get("total", 0)
+                size = item.get("total_size", 0)
+                name = item.get("name", "")
+
+            if sort_by == "size":
+                return (-size, name.lower())
+            elif sort_by == "name":
+                return (name.lower(),)
+            else:  # charts (default)
+                return (-chart_count, name.lower())
+
         total_charts = 0
         total_size = 0
 
-        for folder in self.folders:
+        sorted_folders = sorted(self.folders, key=lambda f: get_sort_key(f, is_folder=True))
+
+        for folder in sorted_folders:
             charts = folder.charts or {}
             chart_count = charts.get("total", folder.chart_count)
             total_charts += chart_count
             total_size += folder.total_size
 
-            status = "" if folder.complete else " [incomplete]"
-            print(f"{folder.name} ({chart_count} charts, {format_size(folder.total_size)}){status}")
+            status = f" {Colors.DIM}[incomplete]{Colors.RESET}" if not folder.complete else ""
+            print(f"{Colors.PURPLE}▐{Colors.RESET} {Colors.BOLD}{folder.name}{Colors.RESET} ({chart_count} charts, {format_size(folder.total_size)}){status}")
 
-            # Sort subfolders by chart count descending
             if folder.subfolders:
-                sorted_subs = sorted(
-                    folder.subfolders,
-                    key=lambda x: x.get("charts", {}).get("total", 0),
-                    reverse=True
-                )
+                sorted_subs = sorted(folder.subfolders, key=lambda x: get_sort_key(x))
                 for sf in sorted_subs:
                     sf_charts = sf.get("charts", {}).get("total", 0)
                     sf_size = sf.get("total_size", 0)
-                    print(f"  {sf.get('name', '?')} ({sf_charts} charts, {format_size(sf_size)})")
+                    print(f"  {sf.get('name', '?')} {Colors.MUTED}({sf_charts} charts, {format_size(sf_size)}){Colors.RESET}")
 
         print()
         print(f"Total: {total_charts} charts, {format_size(total_size)}")
@@ -280,9 +305,20 @@ class Manifest:
 
 if __name__ == "__main__":
     import sys
+    import argparse
+
+    parser = argparse.ArgumentParser(description="View manifest contents")
+    parser.add_argument(
+        "--sort", "-s",
+        choices=["charts", "size", "name"],
+        default="charts",
+        help="Sort by: charts (default), size, or name"
+    )
+    args = parser.parse_args()
+
     manifest_path = Path(__file__).parent.parent / "manifest.json"
     if not manifest_path.exists():
         print(f"Manifest not found: {manifest_path}")
         sys.exit(1)
     manifest = Manifest.load(manifest_path)
-    manifest.print_tree()
+    manifest.print_tree(sort_by=args.sort)
