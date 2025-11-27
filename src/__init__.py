@@ -9,13 +9,9 @@ from .drive_client import DriveClient
 from .manifest import Manifest
 from .downloader import FileDownloader
 from .utils import format_size, format_duration, print_progress
-from .sync_ops import FolderSync, purge_extra_files
-from .ui import (
-    clear_screen,
-    print_header,
-    show_main_menu,
-    show_purge_menu,
-)
+from .sync_ops import FolderSync, purge_all_folders
+from .menu import print_header
+from .ui import clear_screen, show_main_menu
 
 __all__ = [
     "DriveClient",
@@ -25,11 +21,10 @@ __all__ = [
     "format_duration",
     "print_progress",
     "FolderSync",
-    "purge_extra_files",
+    "purge_all_folders",
     "clear_screen",
     "print_header",
     "show_main_menu",
-    "show_purge_menu",
 ]
 
 __version__ = "2.0.0"

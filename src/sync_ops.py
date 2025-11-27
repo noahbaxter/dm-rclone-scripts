@@ -244,33 +244,50 @@ def delete_files(files: list, base_path: Path) -> int:
     return deleted
 
 
-def purge_extra_files(folder: dict, base_path: Path):
+def purge_all_folders(folders: list, base_path: Path):
     """
-    Find and optionally delete files not in the manifest.
+    Purge extra files from all folders automatically.
 
-    Args:
-        folder: Folder dict with 'files' manifest
-        base_path: Base download path
+    Finds and deletes files not in the manifest, shows results for 2 seconds.
     """
-    extras = find_extra_files(folder, base_path)
-
-    if not extras:
-        print("  No extra files found.")
-        return
-
-    total_size = sum(size for _, size in extras)
-    print(f"  Found {len(extras)} files not in manifest ({format_size(total_size)})")
     print()
+    print("=" * 50)
+    print("Purging extra files...")
+    print("=" * 50)
 
-    # Show tree structure
-    tree_lines = format_extras_tree(extras, base_path)
-    for line in tree_lines[:10]:
-        print(f"  {line}")
-    if len(tree_lines) > 10:
-        print(f"    ... and {len(tree_lines) - 10} more folders")
+    total_deleted = 0
+    total_size = 0
 
-    print()
-    confirm = input("  Remove these files? [y/N]: ").strip().lower()
-    if confirm == "y":
+    for folder in folders:
+        if not folder.get("files"):
+            continue
+
+        extras = find_extra_files(folder, base_path)
+        if not extras:
+            continue
+
+        folder_size = sum(size for _, size in extras)
+        print(f"\n[{folder['name']}]")
+        print(f"  Found {len(extras)} extra files ({format_size(folder_size)})")
+
+        # Show tree structure (abbreviated)
+        tree_lines = format_extras_tree(extras, base_path)
+        for line in tree_lines[:5]:
+            print(f"  {line}")
+        if len(tree_lines) > 5:
+            print(f"    ... and {len(tree_lines) - 5} more folders")
+
+        # Delete automatically
         deleted = delete_files(extras, base_path)
-        print(f"  Removed {deleted} files ({format_size(total_size)})")
+        total_deleted += deleted
+        total_size += folder_size
+        print(f"  Removed {deleted} files")
+
+    print()
+    if total_deleted > 0:
+        print(f"Total: Removed {total_deleted} files ({format_size(total_size)})")
+    else:
+        print("No extra files found.")
+
+    # Auto-dismiss after 2 seconds
+    time.sleep(2)

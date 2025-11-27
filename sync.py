@@ -16,11 +16,10 @@ from src import (
     DriveClient,
     Manifest,
     FolderSync,
-    purge_extra_files,
+    purge_all_folders,
     clear_screen,
     print_header,
     show_main_menu,
-    show_purge_menu,
 )
 from src.drive_client import DriveClientConfig
 
@@ -98,23 +97,8 @@ class SyncApp:
             input("\nPress Enter to continue...")
 
     def handle_purge(self):
-        """Handle purge menu."""
-        choice = show_purge_menu(self.folders)
-
-        if choice == "C":
-            return
-        elif choice == "A":
-            base_path = get_download_path()
-            for folder in self.folders:
-                print(f"\n[{folder['name']}]")
-                purge_extra_files(folder, base_path)
-            input("\nPress Enter to continue...")
-        elif choice.isdigit():
-            idx = int(choice) - 1
-            if 0 <= idx < len(self.folders):
-                print(f"\n[{self.folders[idx]['name']}]")
-                purge_extra_files(self.folders[idx], get_download_path())
-                input("\nPress Enter to continue...")
+        """Purge extra files from all folders."""
+        purge_all_folders(self.folders, get_download_path())
 
     def run(self):
         """Main application loop."""

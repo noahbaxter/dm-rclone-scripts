@@ -7,7 +7,7 @@ Handles menu display, user input, and terminal operations.
 import os
 
 from .utils import format_size
-from .menu import Menu, MenuItem, MenuDivider, print_header
+from .menu import Menu, MenuItem, MenuDivider
 
 
 def clear_screen():
@@ -52,21 +52,3 @@ def show_main_menu(folders: list) -> str:
     return result.value
 
 
-def show_purge_menu(all_folders: list) -> str:
-    """Show purge menu and get selection. Returns 'C' if cancelled."""
-    menu = Menu(
-        title="Purge Extra Files",
-        footer="Removes files not in manifest"
-    )
-
-    for i, folder in enumerate(all_folders, 1):
-        hotkey = str(i) if i <= 9 else None
-        menu.add_item(MenuItem(folder['name'], hotkey=hotkey, value=str(i)))
-
-    menu.add_item(MenuDivider())
-    menu.add_item(MenuItem("All folders", hotkey="A", value="A"))
-
-    result = menu.run()
-    if result is None:
-        return "C"  # Cancel
-    return result.value
