@@ -12,18 +12,30 @@ import time
 import argparse
 from pathlib import Path
 
+# Load .env file if it exists
+env_path = Path(__file__).parent / ".env"
+if env_path.exists():
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)
+                os.environ.setdefault(key.strip(), value.strip())
+
 from src import (
     DriveClient,
     Manifest,
     FolderScanner,
     OAuthManager,
     ChangeTracker,
+    DrivesConfig,
     format_size,
     format_duration,
     print_progress,
 )
 from src.drive_client import DriveClientConfig
 from src.manifest import FolderEntry
+from src.charts import count_charts_in_files
 
 # ============================================================================
 # Configuration
@@ -31,25 +43,18 @@ from src.manifest import FolderEntry
 
 API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 MANIFEST_PATH = Path(__file__).parent / "manifest.json"
+DRIVES_PATH = Path(__file__).parent / "drives.json"
 
-# Root folders to scan
-ROOT_FOLDERS = [
-    {
-        "name": "BirdmanExe",
-        "folder_id": "1OTcP60EwXnT73FYy-yjbB2C7yU6mVMTf",
-        "description": "BirdmanExe's chart collection",
-    },
-    {
-        "name": "Drummer's Monthly",
-        "folder_id": "1bqsJzbXRkmRda3qJFX3W36UD3Sg_eIVj",
-        "description": "Official Drummer's Monthly charts",
-    },
-    {
-        "name": "DM Meme Drive",
-        "folder_id": "1DuAZ36Fn_T7f_tD2Ak84Q87xZgxwn1gY",
-        "description": "Meme charts and fun stuff",
-    },
-]
+
+def load_root_folders() -> list[dict]:
+    """Load root folders from drives.json."""
+    if not DRIVES_PATH.exists():
+        print(f"Warning: drives.json not found at {DRIVES_PATH}")
+        print("Using empty folder list. Create drives.json to define drives.")
+        return []
+
+    drives_config = DrivesConfig.load(DRIVES_PATH)
+    return drives_config.to_root_folders_list()
 
 # ============================================================================
 # Full Scan Mode
@@ -68,6 +73,14 @@ def generate_full(force_rescan: bool = False):
     print("=" * 60)
     print()
 
+    # Load root folders from drives.json
+    root_folders = load_root_folders()
+    if not root_folders:
+        print("No folders to scan. Exiting.")
+        return
+
+    expected_ids = {f["folder_id"] for f in root_folders}
+
     # Initialize
     client_config = DriveClientConfig(api_key=API_KEY)
     client = DriveClient(client_config)
@@ -79,22 +92,42 @@ def generate_full(force_rescan: bool = False):
         print("Force rescan: Starting fresh\n")
     else:
         manifest = Manifest.load(MANIFEST_PATH)
-        existing = manifest.get_folder_ids()
-        if existing:
-            print(f"Resuming: {len(existing)} folders already scanned\n")
 
-    scanned_ids = manifest.get_folder_ids()
+        # Remove drives that are no longer in drives.json
+        orphaned_ids = manifest.get_folder_ids() - expected_ids
+        if orphaned_ids:
+            for orphan_id in orphaned_ids:
+                folder = manifest.get_folder(orphan_id)
+                if folder:
+                    print(f"Removing '{folder.name}' (no longer in drives.json)")
+                manifest.remove_folder(orphan_id)
+            manifest.save()
+            print()
 
-    for i, folder_info in enumerate(ROOT_FOLDERS, 1):
+        complete_ids = manifest.get_complete_folder_ids()
+        incomplete_ids = manifest.get_incomplete_folder_ids()
+        if complete_ids or incomplete_ids:
+            status_parts = []
+            if complete_ids:
+                status_parts.append(f"{len(complete_ids)} complete")
+            if incomplete_ids:
+                status_parts.append(f"{len(incomplete_ids)} incomplete")
+            print(f"Resuming: {', '.join(status_parts)}\n")
+
+    complete_ids = manifest.get_complete_folder_ids()
+
+    was_cancelled = False
+
+    for i, folder_info in enumerate(root_folders, 1):
         folder_id = folder_info["folder_id"]
 
-        # Skip if already scanned
-        if folder_id in scanned_ids and not force_rescan:
-            print(f"[{i}/{len(ROOT_FOLDERS)}] {folder_info['name']} - SKIPPED (already in manifest)")
+        # Skip if already fully scanned (incomplete drives get re-scanned)
+        if folder_id in complete_ids and not force_rescan:
+            print(f"[{i}/{len(root_folders)}] {folder_info['name']} - SKIPPED (complete)")
             print()
             continue
 
-        print(f"[{i}/{len(ROOT_FOLDERS)}] {folder_info['name']}")
+        print(f"[{i}/{len(root_folders)}] {folder_info['name']}")
         print("-" * 40)
 
         start_time = time.time()
@@ -112,7 +145,10 @@ def generate_full(force_rescan: bool = False):
         calls_used = client.api_calls - start_api_calls
         folder_size = sum(f["size"] for f in result.files)
 
-        # Update manifest
+        # Count charts
+        drive_stats = count_charts_in_files(result.files)
+
+        # Update manifest (even if cancelled - save partial progress)
         folder_entry = FolderEntry(
             name=folder_info["name"],
             folder_id=folder_id,
@@ -120,41 +156,67 @@ def generate_full(force_rescan: bool = False):
             file_count=len(result.files),
             total_size=folder_size,
             files=result.files,
+            chart_count=drive_stats.chart_counts.total,
+            charts=drive_stats.chart_counts.to_dict(),
+            subfolders=[sf.to_dict() for sf in drive_stats.subfolders.values()],
+            complete=not result.cancelled,  # Mark incomplete if interrupted
         )
         manifest.add_folder(folder_entry)
         manifest.save()
 
         print(f"  {len(result.files)} files ({format_size(folder_size)})")
+        print(f"  {drive_stats.chart_counts.total} charts ({drive_stats.chart_counts.folder} folder, {drive_stats.chart_counts.zip} zip, {drive_stats.chart_counts.sng} sng)")
+        if drive_stats.subfolders:
+            print(f"  {len(drive_stats.subfolders)} subfolders")
         print(f"  {calls_used} API calls in {format_duration(elapsed)}")
-        print(f"  SAVED to manifest.json")
+        if result.cancelled:
+            print(f"  PARTIAL SCAN SAVED to manifest.json")
+        else:
+            print(f"  SAVED to manifest.json")
         print()
 
-    # Save changes token for incremental updates
-    auth = OAuthManager()
-    if auth.is_available and auth.is_configured:
-        print("Saving changes token for incremental updates...")
-        try:
-            token = auth.get_token()
-            if token:
-                oauth_client = DriveClient(client_config, auth_token=token)
-                manifest.changes_token = oauth_client.get_changes_start_token()
-                manifest.save()
-                print(f"  Token saved! Use default mode for future updates.")
-            else:
-                print("  Skipped (OAuth not configured)")
-        except Exception as e:
-            print(f"  Warning: Could not save token: {e}")
-        print()
+        # If scan was cancelled, stop processing more folders
+        if result.cancelled:
+            was_cancelled = True
+            print("Stopping - partial progress has been saved.")
+            print("Run again to continue from where you left off.\n")
+            break
+
+    # Save changes token for incremental updates (only if not cancelled)
+    if not was_cancelled:
+        auth = OAuthManager()
+        if auth.is_available and auth.is_configured:
+            print("Saving changes token for incremental updates...")
+            try:
+                token = auth.get_token()
+                if token:
+                    oauth_client = DriveClient(client_config, auth_token=token)
+                    manifest.changes_token = oauth_client.get_changes_start_token()
+                    manifest.save()
+                    print(f"  Token saved! Use default mode for future updates.")
+                else:
+                    print("  Skipped (OAuth not configured)")
+            except Exception as e:
+                print(f"  Warning: Could not save token: {e}")
+            print()
 
     # Summary
     print("=" * 60)
-    print("Summary")
+    if was_cancelled:
+        print("Summary (PARTIAL - scan was interrupted)")
+    else:
+        print("Summary")
     print("=" * 60)
-    print(f"  Folders in manifest: {len(manifest.folders)}")
+    print(f"  Drives in manifest: {len(manifest.folders)}")
     print(f"  Total files: {manifest.total_files}")
     print(f"  Total size: {format_size(manifest.total_size)}")
+    total_charts = sum(f.chart_count for f in manifest.folders)
+    print(f"  Total charts: {total_charts}")
     print(f"  Total API calls: {client.api_calls}")
     print(f"  Manifest size: {format_size(MANIFEST_PATH.stat().st_size)}")
+    if was_cancelled:
+        print()
+        print("  Run again without --force to resume scanning.")
     print()
 
 
@@ -200,20 +262,39 @@ def generate_incremental():
     # Load manifest
     manifest = Manifest.load(MANIFEST_PATH)
 
-    # Check for saved token
-    if not manifest.changes_token:
-        print("No saved token found - need to do initial full scan first.")
-        print("Run with --full to do a full scan, then use default mode for updates.")
-        print()
-        print("Or, saving current token for future incremental updates...")
+    # Load root folders to check if all drives have been scanned
+    root_folders = load_root_folders()
+    expected_ids = {f["folder_id"] for f in root_folders}
 
-        client_config = DriveClientConfig(api_key=API_KEY)
-        client = DriveClient(client_config, auth_token=token)
-        manifest.changes_token = client.get_changes_start_token()
+    # Remove drives that are no longer in drives.json
+    orphaned_ids = manifest.get_folder_ids() - expected_ids
+    if orphaned_ids:
+        for orphan_id in orphaned_ids:
+            folder = manifest.get_folder(orphan_id)
+            if folder:
+                print(f"Removing '{folder.name}' (no longer in drives.json)")
+            manifest.remove_folder(orphan_id)
         manifest.save()
+        print()
 
-        print(f"  Token saved! Next run will detect changes.")
-        print(f"  API calls: {client.api_calls}")
+    complete_ids = manifest.get_complete_folder_ids()
+    incomplete_ids = manifest.get_incomplete_folder_ids()
+
+    # Check if manifest is incomplete - need full scan first
+    missing_drives = expected_ids - manifest.get_folder_ids()
+    incomplete_drives = expected_ids & incomplete_ids  # Drives that exist but are incomplete
+
+    if not manifest.folders or not manifest.changes_token or missing_drives or incomplete_drives:
+        if not manifest.folders:
+            print("No manifest found - starting full scan...")
+        elif missing_drives:
+            print(f"Incomplete manifest ({len(missing_drives)} drives not scanned) - continuing full scan...")
+        elif incomplete_drives:
+            print(f"Incomplete manifest ({len(incomplete_drives)} drives partially scanned) - continuing full scan...")
+        else:
+            print("No changes token found - starting full scan...")
+        print()
+        generate_full(force_rescan=False)
         return
 
     # Apply changes
@@ -224,10 +305,8 @@ def generate_incremental():
     client = DriveClient(client_config, auth_token=token)
     tracker = ChangeTracker(client, manifest)
 
-    tracked_ids = {f["folder_id"] for f in ROOT_FOLDERS}
-
     try:
-        stats = tracker.apply_changes(tracked_ids)
+        stats = tracker.apply_changes(expected_ids)
     except Exception as e:
         print(f"ERROR: Could not fetch changes: {e}")
         sys.exit(1)
@@ -283,16 +362,12 @@ First-time OAuth setup (automatic on first run):
                         help="Force complete rescan (ignore existing manifest)")
     args = parser.parse_args()
 
-    try:
-        if args.force:
-            generate_full(force_rescan=True)
-        elif args.full:
-            generate_full(force_rescan=False)
-        else:
-            generate_incremental()
-    except KeyboardInterrupt:
-        print("\n\nCancelled. Progress has been saved.")
-        sys.exit(1)
+    if args.force:
+        generate_full(force_rescan=True)
+    elif args.full:
+        generate_full(force_rescan=False)
+    else:
+        generate_incremental()
 
 
 if __name__ == "__main__":
