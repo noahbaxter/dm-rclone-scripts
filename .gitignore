@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+
+# Downloads
+Sync Charts/
+
+# OAuth credentials (admin only, not for users)
+credentials.json
+token.json
+
+# User config
+dm_sync_config.json
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
