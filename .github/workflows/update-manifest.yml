@@ -31,8 +31,22 @@ jobs:
           echo '${{ secrets.GOOGLE_CREDENTIALS }}' > credentials.json
           echo '${{ secrets.GOOGLE_TOKEN }}' > token.json
 
+      - name: Download existing manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Download existing manifest from release (has the changes_token)
+          gh release download manifest --pattern "manifest.json" --clobber || echo "No existing manifest, will do full scan"
+
       - name: Run manifest generator
-        run: python manifest_gen.py
+        run: |
+          if [ -f manifest.json ]; then
+            # Incremental update using existing manifest's changes_token
+            python manifest_gen.py
+          else
+            # First run: need full scan
+            python manifest_gen.py --full
+          fi
 
       - name: Upload manifest to release
         env:
