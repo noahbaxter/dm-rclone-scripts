@@ -5,6 +5,11 @@ Shared utilities for DM Chart Sync.
 import os
 
 
+def clear_screen():
+    """Clear the terminal screen."""
+    os.system("cls" if os.name == "nt" else "clear")
+
+
 def format_size(size_bytes: int) -> str:
     """Format bytes as human readable string."""
     for unit in ["B", "KB", "MB", "GB", "TB"]:

@@ -9,6 +9,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
+from .constants import CHART_MARKERS
 from .downloader import FileDownloader
 from .drive_client import DriveClient
 from .keyboard import wait_with_skip
@@ -35,10 +36,6 @@ class SyncStatus:
     @property
     def is_synced(self) -> bool:
         return self.synced_charts == self.total_charts
-
-
-# Files that indicate a folder is a chart
-CHART_MARKERS = {"song.ini", "notes.mid", "notes.chart"}
 
 
 def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncStatus:

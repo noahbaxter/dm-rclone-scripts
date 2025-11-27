@@ -4,18 +4,12 @@ User interface components for DM Chart Sync.
 Handles menu display, user input, and terminal operations.
 """
 
-import os
 from pathlib import Path
 
-from .utils import format_size
+from .utils import format_size, clear_screen
 from .menu import Menu, MenuItem, MenuDivider, MenuResult
 from .config import UserSettings, extract_subfolders_from_manifest
 from .sync_ops import get_sync_status
-
-
-def clear_screen():
-    """Clear the terminal screen."""
-    os.system("cls" if os.name == "nt" else "clear")
 
 
 def show_main_menu(folders: list, user_settings: UserSettings = None, selected_index: int = 0, download_path: Path = None) -> tuple[str, str | int | None, int]:

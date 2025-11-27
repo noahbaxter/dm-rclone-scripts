@@ -14,11 +14,7 @@ from typing import Any
 
 from .keyboard import getch, KEY_UP, KEY_DOWN, KEY_ENTER, KEY_ESC, KEY_SPACE
 from .colors import Colors, rgb, lerp_color
-
-
-def clear_screen():
-    """Clear the terminal screen."""
-    os.system("cls" if os.name == "nt" else "clear")
+from .utils import clear_screen
 
 
 # Global flag for resize detection

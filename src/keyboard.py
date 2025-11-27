@@ -17,11 +17,6 @@ else:
     import select
 
 
-class KeyboardInterrupt(Exception):
-    """Raised when ESC is pressed."""
-    pass
-
-
 class CancelInput(Exception):
     """Raised when user cancels input with ESC."""
     pass

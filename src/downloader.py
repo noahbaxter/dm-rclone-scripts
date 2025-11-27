@@ -16,6 +16,8 @@ from dataclasses import dataclass
 
 import requests
 
+from .constants import CHART_MARKERS
+
 # Platform-specific imports for ESC detection
 if os.name == 'nt':
     import msvcrt
@@ -82,9 +84,6 @@ class FolderProgress:
     Distinguishes between chart folders (with song.ini/notes) and regular folders.
     """
 
-    # Files that indicate a folder is a chart
-    CHART_MARKERS = {"song.ini", "notes.mid", "notes.chart"}
-
     def __init__(self, total_files: int, total_folders: int):
         self.total_files = total_files
         self.total_folders = total_folders
@@ -117,7 +116,7 @@ class FolderProgress:
             folder_files[folder].append(task.local_path.name.lower())
 
         for folder, filenames in folder_files.items():
-            is_chart = bool(set(filenames) & self.CHART_MARKERS)
+            is_chart = bool(set(filenames) & CHART_MARKERS)
             self.folder_progress[folder] = {
                 "expected": len(filenames),
                 "completed": 0,
