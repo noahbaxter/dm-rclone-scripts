@@ -40,11 +40,12 @@ jobs:
 
       - name: Run manifest generator
         run: |
-          if [ -f manifest.json ]; then
+          # Check if manifest exists AND has folder data (not just a token stub)
+          if [ -f manifest.json ] && python -c "import json; m=json.load(open('manifest.json')); exit(0 if m.get('folders') else 1)"; then
             # Incremental update using existing manifest's changes_token
             python manifest_gen.py
           else
-            # First run: need full scan
+            # First run or empty manifest: need full scan
             python manifest_gen.py --full
           fi
 
