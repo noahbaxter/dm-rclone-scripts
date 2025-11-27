@@ -251,18 +251,13 @@ class Menu:
         # Hint
         print(f"  {Colors.MUTED}↑/↓ Navigate  {Colors.HOTKEY}Enter{Colors.MUTED} Select  {Colors.HOTKEY}Esc{Colors.MUTED} Cancel{Colors.RESET}")
 
-    def run(self, initial_selection: int = 0) -> tuple[MenuItem | MenuAction | None, int]:
-        """Run menu, returns (selected item, selection index) or (None, index) if cancelled."""
+    def run(self) -> MenuItem | MenuAction | None:
+        """Run menu, returns selected item or None if cancelled."""
         selectable = self._selectable()
         if not selectable:
-            return None, 0
+            return None
 
-        # Start at initial_selection if valid, otherwise first item
-        if initial_selection < len(selectable):
-            self._selected = selectable[initial_selection]
-        else:
-            self._selected = selectable[0]
-
+        self._selected = selectable[0]
         hotkeys = {item.hotkey.upper(): i for i, item in enumerate(self.items)
                    if isinstance(item, (MenuItem, MenuAction)) and item.hotkey}
 
@@ -284,7 +279,7 @@ class Menu:
                 continue
 
             if key == KEY_ESC:
-                return None, selectable.index(self._selected)
+                return None
 
             elif key == KEY_UP:
                 pos = selectable.index(self._selected)
@@ -299,15 +294,15 @@ class Menu:
                     self._render()
 
             elif key == KEY_ENTER:
-                return self.items[self._selected], selectable.index(self._selected)
+                return self.items[self._selected]
 
             elif isinstance(key, str) and len(key) == 1:
                 upper = key.upper()
                 if upper in hotkeys:
                     self._selected = hotkeys[upper]
-                    return self.items[self._selected], selectable.index(self._selected)
+                    return self.items[self._selected]
                 if key.isdigit() and key != '0':
                     idx = int(key)
                     if idx <= len(selectable):
                         self._selected = selectable[idx - 1]
-                        return self.items[self._selected], selectable.index(self._selected)
+                        return self.items[self._selected]
