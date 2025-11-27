@@ -9,9 +9,11 @@ Sync Charts/
 # OAuth credentials (admin only, not for users)
 credentials.json
 token.json
+.env
 
 # User config
 dm_sync_config.json
+user_settings.json
 manifest.json
 
 # OS
