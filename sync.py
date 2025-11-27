@@ -115,9 +115,19 @@ class SyncApp:
 
     def handle_download(self, indices: list):
         """Handle folder download."""
+        # Filter out disabled drives
+        enabled_indices = [
+            i for i in indices
+            if self.user_settings.is_drive_enabled(self.folders[i].get("folder_id", ""))
+        ]
+
+        if not enabled_indices:
+            print("\nNo drives enabled. Enable at least one drive to download.")
+            return
+
         # Get disabled subfolders for filtering
-        disabled_map = self._get_disabled_subfolders_for_folders(indices)
-        self.sync.download_folders(self.folders, indices, get_download_path(), disabled_map)
+        disabled_map = self._get_disabled_subfolders_for_folders(enabled_indices)
+        self.sync.download_folders(self.folders, enabled_indices, get_download_path(), disabled_map)
 
     def handle_purge(self):
         """Purge disabled/extra files from all folders."""
