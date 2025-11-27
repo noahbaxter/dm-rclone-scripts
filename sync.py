@@ -136,7 +136,7 @@ class SyncApp:
     def handle_configure_drive(self, drive_index: int):
         """Configure charters for a specific drive."""
         folder = self.folders[drive_index]
-        show_subfolder_settings(folder, self.user_settings)
+        show_subfolder_settings(folder, self.user_settings, get_download_path())
 
     def handle_toggle_drive(self, drive_index: int):
         """Toggle a drive on/off at the top level (preserves charter settings)."""
@@ -177,7 +177,7 @@ class SyncApp:
                 print("No folders available!")
                 print()
 
-            action, value, menu_pos = show_main_menu(self.folders, self.user_settings, selected_index)
+            action, value, menu_pos = show_main_menu(self.folders, self.user_settings, selected_index, get_download_path())
             selected_index = menu_pos  # Always preserve menu position
 
             if action == "quit":

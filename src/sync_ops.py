@@ -6,6 +6,7 @@ Handles folder synchronization, file comparison, and purging.
 
 import time
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
 from .downloader import FileDownloader
@@ -13,6 +14,121 @@ from .drive_client import DriveClient
 from .keyboard import wait_with_skip
 from .scanner import FolderScanner
 from .utils import format_size, format_duration, print_progress
+
+
+@dataclass
+class SyncStatus:
+    """Status of local charts vs manifest."""
+    total_charts: int = 0
+    synced_charts: int = 0
+    total_size: int = 0
+    synced_size: int = 0
+
+    @property
+    def missing_charts(self) -> int:
+        return self.total_charts - self.synced_charts
+
+    @property
+    def missing_size(self) -> int:
+        return self.total_size - self.synced_size
+
+    @property
+    def is_synced(self) -> bool:
+        return self.synced_charts == self.total_charts
+
+
+# Files that indicate a folder is a chart
+CHART_MARKERS = {"song.ini", "notes.mid", "notes.chart"}
+
+
+def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncStatus:
+    """
+    Calculate sync status for enabled folders (counts charts, not files).
+
+    Args:
+        folders: List of folder dicts from manifest
+        base_path: Base download path
+        user_settings: UserSettings for checking enabled states
+
+    Returns:
+        SyncStatus with chart totals and synced counts
+    """
+    status = SyncStatus()
+
+    for folder in folders:
+        folder_id = folder.get("folder_id", "")
+        folder_name = folder.get("name", "")
+        folder_path = base_path / folder_name
+
+        # Skip disabled drives
+        if user_settings and not user_settings.is_drive_enabled(folder_id):
+            continue
+
+        manifest_files = folder.get("files", [])
+        if not manifest_files:
+            continue
+
+        # Get disabled charters
+        disabled_charters = set()
+        if user_settings:
+            disabled_charters = user_settings.get_disabled_subfolders(folder_id)
+
+        # Group files by parent folder to identify charts
+        # chart_folders: {parent_path: {files: [...], has_marker: bool, total_size: int}}
+        chart_folders = defaultdict(lambda: {"files": [], "has_marker": False, "total_size": 0})
+
+        for f in manifest_files:
+            file_path = f.get("path", "")
+            file_size = f.get("size", 0)
+            file_name = file_path.split("/")[-1].lower() if "/" in file_path else file_path.lower()
+
+            # Skip files in disabled charters
+            if disabled_charters:
+                parts = file_path.split("/")
+                if parts and parts[0] in disabled_charters:
+                    continue
+
+            # Get parent folder path
+            if "/" in file_path:
+                parent = "/".join(file_path.split("/")[:-1])
+            else:
+                continue  # Skip root-level files
+
+            chart_folders[parent]["files"].append((file_path, file_size))
+            chart_folders[parent]["total_size"] += file_size
+
+            if file_name in CHART_MARKERS:
+                chart_folders[parent]["has_marker"] = True
+
+        # Count charts (folders with markers)
+        for parent, data in chart_folders.items():
+            if not data["has_marker"]:
+                continue
+
+            status.total_charts += 1
+            status.total_size += data["total_size"]
+
+            # Check if all files in this chart exist locally
+            all_synced = True
+            synced_size = 0
+            for file_path, file_size in data["files"]:
+                local_path = folder_path / file_path
+                if local_path.exists():
+                    try:
+                        if local_path.stat().st_size == file_size:
+                            synced_size += file_size
+                        else:
+                            all_synced = False
+                    except Exception:
+                        all_synced = False
+                else:
+                    all_synced = False
+
+            if all_synced:
+                status.synced_charts += 1
+                status.synced_size += data["total_size"]
+
+    return status
 
 
 class FolderSync:

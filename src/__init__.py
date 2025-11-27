@@ -10,7 +10,7 @@ from .manifest import Manifest
 from .downloader import FileDownloader
 from .scanner import FolderScanner
 from .utils import format_size, format_duration, print_progress
-from .sync_ops import FolderSync, purge_all_folders
+from .sync_ops import FolderSync, purge_all_folders, get_sync_status, SyncStatus
 from .menu import print_header
 from .ui import clear_screen, show_main_menu, show_subfolder_settings
 from .config import DrivesConfig, UserSettings, DriveConfig, extract_subfolders_from_manifest
@@ -39,6 +39,8 @@ __all__ = [
     "OAuthManager",
     "ChangeTracker",
     "Colors",
+    "get_sync_status",
+    "SyncStatus",
 ]
 
 __version__ = "2.0.0"
