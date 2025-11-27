@@ -7,6 +7,9 @@ on:
   # Allow manual trigger
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   update-manifest:
     runs-on: ubuntu-latest
