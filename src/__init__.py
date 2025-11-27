@@ -16,6 +16,7 @@ from .ui import clear_screen, show_main_menu, show_subfolder_settings
 from .config import DrivesConfig, UserSettings, DriveConfig, extract_subfolders_from_manifest
 from .auth import OAuthManager
 from .changes import ChangeTracker
+from .colors import Colors
 
 __all__ = [
     "DriveClient",
@@ -37,6 +38,7 @@ __all__ = [
     "extract_subfolders_from_manifest",
     "OAuthManager",
     "ChangeTracker",
+    "Colors",
 ]
 
 __version__ = "2.0.0"

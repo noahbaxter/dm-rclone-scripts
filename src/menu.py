@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .keyboard import getch, KEY_UP, KEY_DOWN, KEY_ENTER, KEY_ESC, KEY_SPACE
+from .colors import Colors, rgb, lerp_color
 
 
 def clear_screen():
@@ -53,32 +54,6 @@ GRADIENT_COLORS = [
     (244, 114, 182),  # Hot pink
     (251, 113, 133),  # Rose
 ]
-
-
-class Colors:
-    RESET = "\x1b[0m"
-    BOLD = "\x1b[1m"
-    DIM = "\x1b[2m"
-    PURPLE = "\x1b[38;2;138;43;226m"
-    INDIGO = "\x1b[38;2;99;102;241m"
-    PINK = "\x1b[38;2;244;114;182m"
-    PINK_DIM = "\x1b[38;2;150;70;110m"  # Darker pink for disabled selected items
-    DIM_HOVER = "\x1b[38;2;140;150;160m"  # Slightly brighter text for hovered disabled items
-    HOTKEY = "\x1b[38;2;167;139;250m"
-    MUTED = "\x1b[38;2;148;163;184m"
-    MUTED_DIM = "\x1b[38;2;90;100;110m"  # Darker muted for disabled descriptions
-
-
-def rgb(r: int, g: int, b: int) -> str:
-    return f"\x1b[38;2;{r};{g};{b}m"
-
-
-def lerp_color(c1: tuple, c2: tuple, t: float) -> tuple:
-    return (
-        int(c1[0] + (c2[0] - c1[0]) * t),
-        int(c1[1] + (c2[1] - c1[1]) * t),
-        int(c1[2] + (c2[2] - c1[2]) * t),
-    )
 
 
 def get_gradient_color(pos: float) -> tuple:
