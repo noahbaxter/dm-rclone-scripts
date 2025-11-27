@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .downloader import FileDownloader
 from .drive_client import DriveClient
+from .keyboard import wait_with_skip
 from .scanner import FolderScanner
 from .utils import format_size, format_duration, print_progress
 
@@ -168,8 +169,8 @@ class FolderSync:
         print(f"  Total errors: {total_errors}")
         print("=" * 50)
 
-        # Auto-dismiss after 2 seconds
-        time.sleep(2)
+        # Auto-dismiss after 2 seconds (any key skips)
+        wait_with_skip(2)
 
 
 def format_extras_tree(files: list, base_path: Path) -> list[str]:
@@ -361,5 +362,5 @@ def purge_all_folders(folders: list, base_path: Path, user_settings=None):
     else:
         print("No files to purge.")
 
-    # Auto-dismiss after 2 seconds
-    time.sleep(2)
+    # Auto-dismiss after 2 seconds (any key skips)
+    wait_with_skip(2)

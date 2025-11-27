@@ -293,3 +293,35 @@ def menu_input(prompt: str = "") -> str:
             if len(result) == 1 and ch.upper() in 'QAXCRP':
                 print()
                 return ch.upper()
+
+
+def wait_with_skip(seconds: float = 2.0):
+    """
+    Wait for specified seconds, but any keypress skips immediately.
+
+    Args:
+        seconds: How long to wait (default 2 seconds)
+    """
+    if os.name == 'nt':
+        end_time = time.time() + seconds
+        while time.time() < end_time:
+            if msvcrt.kbhit():
+                msvcrt.getch()  # Consume the keypress
+                return
+            time.sleep(0.05)
+    else:
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            end_time = time.time() + seconds
+            while time.time() < end_time:
+                remaining = end_time - time.time()
+                if remaining <= 0:
+                    break
+                # Check for input with timeout
+                if select.select([sys.stdin], [], [], min(0.05, remaining))[0]:
+                    sys.stdin.read(1)  # Consume the keypress
+                    return
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)

@@ -16,7 +16,7 @@ def clear_screen():
     os.system("cls" if os.name == "nt" else "clear")
 
 
-def show_main_menu(folders: list, user_settings: UserSettings = None, selected_index: int = 0) -> tuple[str, str | int | None]:
+def show_main_menu(folders: list, user_settings: UserSettings = None, selected_index: int = 0) -> tuple[str, str | int | None, int]:
     """
     Show main menu and get user selection.
 
@@ -25,12 +25,12 @@ def show_main_menu(folders: list, user_settings: UserSettings = None, selected_i
         user_settings: User settings for checking charter enabled states
         selected_index: Index to keep selected (for maintaining position after toggle)
 
-    Returns tuple of (action, value):
-        - ("quit", None) - user wants to quit
-        - ("download", None) - download all enabled
-        - ("purge", None) - purge extra files
-        - ("configure", index) - configure specific drive (enter on drive)
-        - ("toggle", index) - toggle drive on/off (space on drive)
+    Returns tuple of (action, value, menu_position):
+        - ("quit", None, pos) - user wants to quit
+        - ("download", None, pos) - download all enabled
+        - ("purge", None, pos) - purge extra files
+        - ("configure", index, pos) - configure specific drive (enter on drive)
+        - ("toggle", index, pos) - toggle drive on/off (space on drive)
     """
     menu = Menu(title="Available chart packs:", space_hint="Toggle")
 
@@ -102,17 +102,21 @@ def show_main_menu(folders: list, user_settings: UserSettings = None, selected_i
 
     result = menu.run(initial_index=selected_index)
     if result is None:
-        return ("quit", None)
+        return ("quit", None, selected_index)
+
+    # Get position to restore (use pre-hotkey position for hotkey actions)
+    restore_pos = menu._selected_before_hotkey if menu._selected_before_hotkey != menu._selected else menu._selected
 
     # Handle drive items (numbered items have int index as value)
     if isinstance(result.value, int):
         if result.action == "space":
-            return ("toggle", result.value)
+            return ("toggle", result.value, menu._selected)
         else:  # enter
-            return ("configure", result.value)
+            return ("configure", result.value, menu._selected)
 
-    # Handle action items
-    return result.value
+    # Handle action items (download, purge, quit) - restore to pre-hotkey position
+    action, value = result.value
+    return (action, value, restore_pos)
 
 
 def show_subfolder_settings(folder: dict, user_settings: UserSettings) -> bool:

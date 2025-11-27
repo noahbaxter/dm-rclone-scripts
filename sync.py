@@ -158,7 +158,7 @@ class SyncApp:
         print_header()
         self.load_manifest()
 
-        selected_index = 0  # Track selected position for maintaining after toggle
+        selected_index = 0  # Track selected position for maintaining after actions
 
         while True:
             if not self.folders:
@@ -167,7 +167,8 @@ class SyncApp:
                 print("No folders available!")
                 print()
 
-            action, value = show_main_menu(self.folders, self.user_settings, selected_index)
+            action, value, menu_pos = show_main_menu(self.folders, self.user_settings, selected_index)
+            selected_index = menu_pos  # Always preserve menu position
 
             if action == "quit":
                 print("\nGoodbye!")
@@ -184,13 +185,11 @@ class SyncApp:
                 # Enter on a drive - go directly to configure that drive
                 if 0 <= value < len(self.folders):
                     self.handle_configure_drive(value)
-                    selected_index = value  # Maintain position
 
             elif action == "toggle":
                 # Space on a drive - toggle drive on/off
                 if 0 <= value < len(self.folders):
                     self.handle_toggle_drive(value)
-                    selected_index = value  # Maintain position after toggle
 
 
 def main():

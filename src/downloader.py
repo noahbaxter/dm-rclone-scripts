@@ -4,6 +4,7 @@ File downloader for DM Chart Sync.
 Handles parallel file downloads with progress tracking and retries.
 """
 
+import os
 import sys
 import shutil
 import threading
@@ -14,6 +15,63 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 import requests
+
+# Platform-specific imports for ESC detection
+if os.name == 'nt':
+    import msvcrt
+else:
+    import termios
+    import tty
+    import select
+
+
+class EscMonitor:
+    """Background thread that monitors for ESC key presses."""
+
+    def __init__(self, on_esc: Callable[[], None]):
+        self.on_esc = on_esc
+        self._stop = threading.Event()
+        self._thread = None
+        self._old_settings = None
+
+    def start(self):
+        """Start monitoring for ESC."""
+        self._thread = threading.Thread(target=self._monitor, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        """Stop monitoring."""
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=0.5)
+
+    def _monitor(self):
+        """Monitor loop - checks for ESC key."""
+        if os.name == 'nt':
+            while not self._stop.is_set():
+                if msvcrt.kbhit():
+                    ch = msvcrt.getch()
+                    if ch == b'\x1b':  # ESC
+                        self.on_esc()
+                        return
+                time.sleep(0.05)
+        else:
+            fd = sys.stdin.fileno()
+            try:
+                self._old_settings = termios.tcgetattr(fd)
+                # Use cbreak mode instead of raw - preserves output processing
+                tty.setcbreak(fd)
+
+                while not self._stop.is_set():
+                    # Check for input with short timeout
+                    if select.select([sys.stdin], [], [], 0.05)[0]:
+                        ch = sys.stdin.read(1)
+                        if ch == '\x1b':  # ESC
+                            self.on_esc()
+                            return
+            finally:
+                if self._old_settings:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, self._old_settings)
 
 
 class FolderProgress:
@@ -282,24 +340,32 @@ class FileDownloader:
             progress = FolderProgress(total_files=len(tasks), total_folders=0)
             progress.register_folders(tasks)
             print(f"  Downloading {len(tasks)} files across {progress.total_folders} charts...")
+            print(f"  (Press ESC to cancel)")
             print()
 
         # Set up Ctrl+C handler for cancellation
         original_handler = None
         import signal
 
-        def handle_interrupt(signum, frame):
+        def handle_cancel():
             nonlocal cancelled
-            if not cancelled:  # Only print message once
+            if not cancelled:
                 cancelled = True
                 if progress:
                     progress.cancel()
-                print("\n  Ctrl+C pressed - cancelling downloads...")
+                print("\n  Cancelling downloads...")
+
+        def handle_interrupt(signum, frame):
+            handle_cancel()
 
         try:
             original_handler = signal.signal(signal.SIGINT, handle_interrupt)
         except Exception:
             pass  # Signal handling not available
+
+        # Start ESC key monitor
+        esc_monitor = EscMonitor(on_esc=handle_cancel)
+        esc_monitor.start()
 
         try:
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
@@ -346,7 +412,10 @@ class FileDownloader:
             cancelled = True
 
         finally:
-            # Restore original signal handler immediately
+            # Stop ESC monitor
+            esc_monitor.stop()
+
+            # Restore original signal handler
             try:
                 signal.signal(signal.SIGINT, original_handler or signal.SIG_DFL)
             except Exception:
