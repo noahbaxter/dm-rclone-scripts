@@ -19,6 +19,7 @@ class ScanResult:
     folder_count: int
     shortcut_count: int
     api_calls: int
+    cancelled: bool = False  # True if scan was interrupted by Ctrl+C
 
 
 class FolderScanner:
@@ -60,52 +61,65 @@ class FolderScanner:
             progress_callback: Optional callback(folders_scanned, files_found, shortcuts_found)
 
         Returns:
-            ScanResult with files list and stats
+            ScanResult with files list and stats (cancelled=True if interrupted)
         """
         all_files = []
         folders_to_scan = [(folder_id, base_path)]
         folder_count = 0
         shortcut_count = 0
         start_api_calls = self.client.api_calls
+        cancelled = False
 
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            while folders_to_scan:
-                # Submit batch of folder scans
-                futures = {
-                    executor.submit(self.client.list_folder, fid): (fid, fpath)
-                    for fid, fpath in folders_to_scan
-                }
-                folders_to_scan = []
+        try:
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                while folders_to_scan:
+                    # Submit batch of folder scans
+                    futures = {
+                        executor.submit(self.client.list_folder, fid): (fid, fpath)
+                        for fid, fpath in folders_to_scan
+                    }
+                    folders_to_scan = []
 
-                for future in as_completed(futures):
-                    folder_id_done, folder_path = futures[future]
-                    try:
-                        items = future.result()
-                        folder_count += 1
+                    for future in as_completed(futures):
+                        folder_id_done, folder_path = futures[future]
+                        try:
+                            items = future.result()
+                            folder_count += 1
 
-                        for item in items:
-                            item_name = item["name"]
-                            item_path = f"{folder_path}/{item_name}" if folder_path else item_name
-                            mime_type = item["mimeType"]
+                            for item in items:
+                                item_name = item["name"]
+                                item_path = f"{folder_path}/{item_name}" if folder_path else item_name
+                                mime_type = item["mimeType"]
 
-                            # Handle regular folders
-                            if mime_type == self.FOLDER_MIME:
-                                folders_to_scan.append((item["id"], item_path))
+                                # Handle regular folders
+                                if mime_type == self.FOLDER_MIME:
+                                    folders_to_scan.append((item["id"], item_path))
 
-                            # Handle shortcuts (links to other drives)
-                            elif mime_type == self.SHORTCUT_MIME:
-                                shortcut_details = item.get("shortcutDetails", {})
-                                target_id = shortcut_details.get("targetId")
-                                target_mime = shortcut_details.get("targetMimeType", "")
+                                # Handle shortcuts (links to other drives)
+                                elif mime_type == self.SHORTCUT_MIME:
+                                    shortcut_details = item.get("shortcutDetails", {})
+                                    target_id = shortcut_details.get("targetId")
+                                    target_mime = shortcut_details.get("targetMimeType", "")
 
-                                if target_id and target_mime == self.FOLDER_MIME:
-                                    # Shortcut to folder - follow it
-                                    shortcut_count += 1
-                                    folders_to_scan.append((target_id, item_path))
-                                elif target_id:
-                                    # Shortcut to file
+                                    if target_id and target_mime == self.FOLDER_MIME:
+                                        # Shortcut to folder - follow it
+                                        shortcut_count += 1
+                                        folders_to_scan.append((target_id, item_path))
+                                    elif target_id:
+                                        # Shortcut to file
+                                        all_files.append({
+                                            "id": target_id,
+                                            "path": item_path,
+                                            "name": item_name,
+                                            "size": int(item.get("size", 0)),
+                                            "md5": item.get("md5Checksum", ""),
+                                            "modified": item.get("modifiedTime", ""),
+                                        })
+
+                                # Handle regular files
+                                else:
                                     all_files.append({
-                                        "id": target_id,
+                                        "id": item["id"],
                                         "path": item_path,
                                         "name": item_name,
                                         "size": int(item.get("size", 0)),
@@ -113,30 +127,24 @@ class FolderScanner:
                                         "modified": item.get("modifiedTime", ""),
                                     })
 
-                            # Handle regular files
-                            else:
-                                all_files.append({
-                                    "id": item["id"],
-                                    "path": item_path,
-                                    "name": item_name,
-                                    "size": int(item.get("size", 0)),
-                                    "md5": item.get("md5Checksum", ""),
-                                    "modified": item.get("modifiedTime", ""),
-                                })
+                            # Progress callback
+                            if progress_callback:
+                                progress_callback(folder_count, len(all_files), shortcut_count)
 
-                        # Progress callback
-                        if progress_callback:
-                            progress_callback(folder_count, len(all_files), shortcut_count)
+                        except Exception as e:
+                            # Log error but continue scanning
+                            print(f"\n  Error scanning folder: {e}")
 
-                    except Exception as e:
-                        # Log error but continue scanning
-                        print(f"\n  Error scanning folder: {e}")
+        except KeyboardInterrupt:
+            cancelled = True
+            print("\n  Scan interrupted by user (Ctrl+C)")
 
         return ScanResult(
             files=all_files,
             folder_count=folder_count,
             shortcut_count=shortcut_count,
             api_calls=self.client.api_calls - start_api_calls,
+            cancelled=cancelled,
         )
 
     def scan_for_sync(
