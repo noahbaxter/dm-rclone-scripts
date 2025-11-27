@@ -133,16 +133,16 @@ def generate_full(force_rescan: bool = False):
         start_time = time.time()
         start_api_calls = client.api_calls
 
-        # Progress callback with live chart counting
-        last_chart_count = [0]  # Use list to allow mutation in closure
+        # Progress callback with periodic chart counting
+        last_chart_count = [0]
         def progress(folders, files, shortcuts, files_list):
-            # Count charts periodically (every ~100 files to avoid slowdown)
-            if files % 100 == 0 or files < 100:
+            # Count charts periodically (every 500 files to avoid slowdown)
+            if files % 500 == 0 or files < 100:
                 stats = count_charts_in_files(files_list)
                 last_chart_count[0] = stats.chart_counts.total
 
             shortcut_info = f", {shortcuts} shortcuts" if shortcuts else ""
-            print_progress(f"[{client.api_calls} API] {folders} folders, {files} files, {last_chart_count[0]} charts{shortcut_info}")
+            print_progress(f"[{client.api_calls} API] {folders} folders, {files} files, ~{last_chart_count[0]} charts{shortcut_info}")
 
         result = scanner.scan(folder_id, "", progress)
         print()
