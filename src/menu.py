@@ -127,6 +127,7 @@ class MenuItem:
     value: Any = None
     description: str | None = None
     disabled: bool = False  # If True, render with grey/dim style
+    show_toggle: bool | None = None  # If set, show [ON]/[OFF] indicator
 
     def __post_init__(self):
         if self.value is None:
@@ -168,6 +169,7 @@ class Menu:
     """Interactive terminal menu with arrow key navigation."""
 
     title: str = ""
+    subtitle: str = ""  # Status line below title
     footer: str = ""
     space_hint: str = ""  # Hint for spacebar action, e.g. "Toggle"
     items: list = field(default_factory=list)
@@ -184,6 +186,8 @@ class Menu:
         w = 40
         if self.title:
             w = max(w, len(self.title) + 8)
+        if self.subtitle:
+            w = max(w, len(self.subtitle) + 8)
         for item in self.items:
             if isinstance(item, (MenuItem, MenuAction)):
                 length = len(item.label) + (len(item.description) + 3 if item.description else 0) + 8
@@ -206,6 +210,11 @@ class Menu:
             pad = w - 4 - len(self.title)
             left = pad // 2
             print(f"{c}{BOX_V}{Colors.RESET} {' ' * left}{Colors.BOLD}{self.title}{Colors.RESET}{' ' * (pad - left)} {c}{BOX_V}{Colors.RESET}")
+            # Subtitle (status line)
+            if self.subtitle:
+                sub_pad = w - 4 - len(strip_ansi(self.subtitle))
+                sub_left = sub_pad // 2
+                print(f"{c}{BOX_V}{Colors.RESET} {' ' * sub_left}{Colors.MUTED}{self.subtitle}{Colors.RESET}{' ' * (sub_pad - sub_left)} {c}{BOX_V}{Colors.RESET}")
             print(_box_row(BOX_TL_DIV, BOX_H, BOX_TR_DIV, w, c))
 
         # Items
@@ -217,32 +226,43 @@ class Menu:
                 is_disabled = getattr(item, 'disabled', False)
 
                 # Build content based on enabled/disabled and selected state
+                show_toggle = getattr(item, 'show_toggle', None)
+
+                # Build toggle prefix if needed
+                if show_toggle is not None:
+                    if show_toggle:
+                        toggle_prefix = f"{Colors.HOTKEY}[ON]{Colors.RESET}  "
+                    else:
+                        toggle_prefix = f"{Colors.DIM}[OFF]{Colors.RESET} "
+                else:
+                    toggle_prefix = ""
+
                 if is_disabled:
                     # Disabled items - dimmed text and darker description
                     if selected:
                         # Slightly brighter text when hovered
-                        hotkey = f"{Colors.DIM_HOVER}[{item.hotkey}]{Colors.RESET} " if item.hotkey else "    "
+                        hotkey = f"{Colors.DIM_HOVER}[{item.hotkey}]{Colors.RESET} " if item.hotkey else ""
                         label = f"{Colors.DIM_HOVER}{item.label}{Colors.RESET}"
                         if item.description:
                             label += f" {Colors.MUTED_DIM}({item.description}){Colors.RESET}"
-                        content = f"{Colors.PINK_DIM}▸{Colors.RESET} {hotkey}{label}"
+                        content = f"{Colors.PINK_DIM}▸{Colors.RESET} {toggle_prefix}{hotkey}{label}"
                     else:
-                        hotkey = f"{Colors.DIM}[{item.hotkey}]{Colors.RESET} " if item.hotkey else "    "
+                        hotkey = f"{Colors.DIM}[{item.hotkey}]{Colors.RESET} " if item.hotkey else ""
                         label = f"{Colors.DIM}{item.label}{Colors.RESET}"
                         if item.description:
                             label += f" {Colors.MUTED_DIM}({item.description}){Colors.RESET}"
-                        content = f"  {hotkey}{label}"
+                        content = f"  {toggle_prefix}{hotkey}{label}"
                 else:
                     # Enabled items - normal colors
-                    hotkey = f"{Colors.HOTKEY}[{item.hotkey}]{Colors.RESET} " if item.hotkey else "    "
+                    hotkey = f"{Colors.HOTKEY}[{item.hotkey}]{Colors.RESET} " if item.hotkey else ""
                     label = item.label
                     if item.description:
                         label += f" {Colors.MUTED}({item.description}){Colors.RESET}"
 
                     if selected:
-                        content = f"{Colors.PINK}▸{Colors.RESET} {hotkey}{Colors.BOLD}{label}{Colors.RESET}"
+                        content = f"{Colors.PINK}▸{Colors.RESET} {toggle_prefix}{hotkey}{Colors.BOLD}{label}{Colors.RESET}"
                     else:
-                        content = f"  {hotkey}{label}"
+                        content = f"  {toggle_prefix}{hotkey}{label}"
 
                 visible = len(strip_ansi(content))
                 pad = w - 4 - visible

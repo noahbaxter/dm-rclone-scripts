@@ -140,6 +140,10 @@ class UserSettings:
         self.set_drive_enabled(drive_id, not current)
         return not current
 
+    def enable_drive(self, drive_id: str):
+        """Enable a drive."""
+        self.set_drive_enabled(drive_id, True)
+
     def is_subfolder_enabled(self, drive_id: str, subfolder_name: str) -> bool:
         """Check if a subfolder is enabled (defaults to True)."""
         return self.subfolder_toggles.get(drive_id, {}).get(subfolder_name, True)
