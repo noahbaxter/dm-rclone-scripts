@@ -4,14 +4,115 @@ File downloader for DM Chart Sync.
 Handles parallel file downloads with progress tracking and retries.
 """
 
+import sys
+import shutil
 import threading
+import time
 from pathlib import Path
 from typing import Callable, Optional, Tuple, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 import requests
-from tqdm import tqdm
+
+
+class FolderProgress:
+    """
+    Progress tracker that reports completed folders (charts).
+
+    Groups files by their parent folder and prints when each folder completes.
+    """
+
+    def __init__(self, total_files: int, total_folders: int):
+        self.total_files = total_files
+        self.total_folders = total_folders
+        self.completed_files = 0
+        self.completed_folders = 0
+        self.start_time = time.time()
+        self.lock = threading.Lock()
+        self._closed = False
+        self._cancelled = False
+
+        # Track files per folder: {folder_path: {expected: int, completed: int}}
+        self.folder_progress = {}
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancelled
+
+    def cancel(self):
+        """Signal cancellation."""
+        self._cancelled = True
+
+    def register_folders(self, tasks):
+        """Register all folders and their expected file counts."""
+        folder_counts = {}
+        for task in tasks:
+            folder = str(task.local_path.parent)
+            folder_counts[folder] = folder_counts.get(folder, 0) + 1
+
+        for folder, count in folder_counts.items():
+            self.folder_progress[folder] = {"expected": count, "completed": 0}
+
+        self.total_folders = len(folder_counts)
+
+    def file_completed(self, local_path: Path) -> str | None:
+        """
+        Mark a file as completed. Returns folder name if folder is now complete.
+        """
+        with self.lock:
+            if self._closed:
+                return None
+
+            self.completed_files += 1
+            folder = str(local_path.parent)
+
+            if folder in self.folder_progress:
+                self.folder_progress[folder]["completed"] += 1
+
+                # Check if folder is complete
+                if self.folder_progress[folder]["completed"] >= self.folder_progress[folder]["expected"]:
+                    self.completed_folders += 1
+                    return local_path.parent.name  # Return just the folder name
+
+            return None
+
+    def print_folder_complete(self, folder_name: str):
+        """Print progress when a folder completes."""
+        with self.lock:
+            if self._closed:
+                return
+
+            term_width = shutil.get_terminal_size().columns
+            elapsed = time.time() - self.start_time
+            rate = self.completed_files / elapsed if elapsed > 0 else 0
+
+            pct = (self.completed_folders / self.total_folders * 100) if self.total_folders > 0 else 0
+
+            # Simple format: percentage, counts, folder name
+            core = f"  {pct:5.1f}% ({self.completed_folders}/{self.total_folders} charts, {rate:.1f} files/s)"
+
+            remaining = term_width - len(core) - 5
+            if remaining > 10:
+                if len(folder_name) > remaining:
+                    folder_name = folder_name[:remaining-3] + "..."
+                line = f"{core}  {folder_name}"
+            else:
+                line = core
+
+            print(line)
+
+    def write(self, msg: str):
+        """Write a message."""
+        with self.lock:
+            print(msg)
+
+    def close(self):
+        """Close the progress tracker."""
+        with self.lock:
+            if self._closed:
+                return
+            self._closed = True
 
 
 @dataclass
@@ -157,7 +258,7 @@ class FileDownloader:
         tasks: List[DownloadTask],
         progress_callback: Optional[Callable[[DownloadResult], None]] = None,
         show_progress: bool = True,
-    ) -> Tuple[int, int, int]:
+    ) -> Tuple[int, int, int, bool]:
         """
         Download multiple files in parallel.
 
@@ -167,17 +268,38 @@ class FileDownloader:
             show_progress: Whether to show tqdm progress bar
 
         Returns:
-            Tuple of (downloaded_count, skipped_count, error_count)
+            Tuple of (downloaded_count, skipped_count, error_count, cancelled)
         """
         if not tasks:
-            return 0, 0, 0
+            return 0, 0, 0, False
 
         downloaded = 0
         errors = 0
+        cancelled = False
 
-        pbar = None
+        progress = None
         if show_progress:
-            pbar = tqdm(total=len(tasks), desc="  Downloading", unit="file")
+            progress = FolderProgress(total_files=len(tasks), total_folders=0)
+            progress.register_folders(tasks)
+            print(f"  Downloading {len(tasks)} files across {progress.total_folders} charts...")
+            print()
+
+        # Set up Ctrl+C handler for cancellation
+        original_handler = None
+        import signal
+
+        def handle_interrupt(signum, frame):
+            nonlocal cancelled
+            if not cancelled:  # Only print message once
+                cancelled = True
+                if progress:
+                    progress.cancel()
+                print("\n  Ctrl+C pressed - cancelling downloads...")
+
+        try:
+            original_handler = signal.signal(signal.SIGINT, handle_interrupt)
+        except Exception:
+            pass  # Signal handling not available
 
         try:
             with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
@@ -187,37 +309,55 @@ class FileDownloader:
                 }
 
                 for future in as_completed(futures):
+                    # Check for cancellation
+                    if cancelled or (progress and progress.cancelled):
+                        # Cancel remaining futures
+                        for f in futures:
+                            f.cancel()
+                        break
+
                     task = futures[future]
                     try:
                         result = future.result()
 
-                        if pbar:
-                            with self._print_lock:
-                                pbar.set_postfix_str(task.local_path.name[:30])
-                                pbar.update(1)
-
                         if result.success:
                             downloaded += 1
+                            if progress:
+                                completed_folder = progress.file_completed(task.local_path)
+                                if completed_folder:
+                                    progress.print_folder_complete(completed_folder)
                         else:
                             errors += 1
-                            if pbar:
-                                tqdm.write(f"  {result.message}")
+                            if progress:
+                                progress.file_completed(task.local_path)  # Still count it
+                                progress.write(f"  {result.message}")
 
                         if progress_callback:
                             progress_callback(result)
 
                     except Exception as e:
                         errors += 1
-                        if pbar:
-                            with self._print_lock:
-                                pbar.update(1)
-                                tqdm.write(f"  ERR: {task.local_path.name} - {e}")
+                        if progress:
+                            progress.file_completed(task.local_path)
+                            progress.write(f"  ERR: {task.local_path.name} - {e}")
+
+        except KeyboardInterrupt:
+            # Handle any remaining Ctrl+C during cleanup
+            cancelled = True
 
         finally:
-            if pbar:
-                pbar.close()
+            # Restore original signal handler immediately
+            try:
+                signal.signal(signal.SIGINT, original_handler or signal.SIG_DFL)
+            except Exception:
+                pass
 
-        return downloaded, 0, errors
+            if progress:
+                progress.close()
+            if cancelled:
+                print(f"  Cancelled. Downloaded {downloaded} files ({progress.completed_folders if progress else 0} complete charts).")
+
+        return downloaded, 0, errors, cancelled
 
     @staticmethod
     def filter_existing(
