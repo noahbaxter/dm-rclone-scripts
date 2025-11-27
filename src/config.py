@@ -37,14 +37,31 @@ class UserConfig:
     CONFIG_FILENAME = "dm_sync_config.json"
 
     @classmethod
-    def get_default_path(cls) -> Path:
-        """Get the default config file path (next to executable or script)."""
+    def get_app_dir(cls) -> Path:
+        """Get the directory where the app is located."""
         if getattr(sys, "frozen", False):
             # Running as compiled exe
-            return Path(sys.executable).parent / cls.CONFIG_FILENAME
+            return Path(sys.executable).parent
         else:
             # Running as script
-            return Path(__file__).parent.parent / cls.CONFIG_FILENAME
+            return Path(__file__).parent.parent
+
+    @classmethod
+    def get_default_path(cls) -> Path:
+        """Get the default config file path (next to executable or script)."""
+        return cls.get_app_dir() / cls.CONFIG_FILENAME
+
+    def resolve_download_path(self) -> Path:
+        """
+        Resolve the download path to an absolute path.
+
+        - Expands ~ to home directory
+        - Resolves relative paths relative to the app directory
+        """
+        path = Path(self.download_path).expanduser()
+        if not path.is_absolute():
+            path = self.get_app_dir() / path
+        return path
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "UserConfig":
