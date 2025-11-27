@@ -127,9 +127,9 @@ class FolderScanner:
                                         "modified": item.get("modifiedTime", ""),
                                     })
 
-                            # Progress callback
+                            # Progress callback (includes files list for chart counting)
                             if progress_callback:
-                                progress_callback(folder_count, len(all_files), shortcut_count)
+                                progress_callback(folder_count, len(all_files), shortcut_count, all_files)
 
                         except Exception as e:
                             # Log error but continue scanning

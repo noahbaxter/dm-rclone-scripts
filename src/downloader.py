@@ -76,22 +76,27 @@ class EscMonitor:
 
 class FolderProgress:
     """
-    Progress tracker that reports completed folders (charts).
+    Progress tracker that reports completed folders/charts.
 
     Groups files by their parent folder and prints when each folder completes.
+    Distinguishes between chart folders (with song.ini/notes) and regular folders.
     """
+
+    # Files that indicate a folder is a chart
+    CHART_MARKERS = {"song.ini", "notes.mid", "notes.chart"}
 
     def __init__(self, total_files: int, total_folders: int):
         self.total_files = total_files
         self.total_folders = total_folders
+        self.total_charts = 0
         self.completed_files = 0
-        self.completed_folders = 0
+        self.completed_charts = 0
         self.start_time = time.time()
         self.lock = threading.Lock()
         self._closed = False
         self._cancelled = False
 
-        # Track files per folder: {folder_path: {expected: int, completed: int}}
+        # Track files per folder: {folder_path: {expected: int, completed: int, is_chart: bool}}
         self.folder_progress = {}
 
     @property
@@ -104,19 +109,28 @@ class FolderProgress:
 
     def register_folders(self, tasks):
         """Register all folders and their expected file counts."""
-        folder_counts = {}
+        folder_files = {}
         for task in tasks:
             folder = str(task.local_path.parent)
-            folder_counts[folder] = folder_counts.get(folder, 0) + 1
+            if folder not in folder_files:
+                folder_files[folder] = []
+            folder_files[folder].append(task.local_path.name.lower())
 
-        for folder, count in folder_counts.items():
-            self.folder_progress[folder] = {"expected": count, "completed": 0}
+        for folder, filenames in folder_files.items():
+            is_chart = bool(set(filenames) & self.CHART_MARKERS)
+            self.folder_progress[folder] = {
+                "expected": len(filenames),
+                "completed": 0,
+                "is_chart": is_chart
+            }
+            if is_chart:
+                self.total_charts += 1
 
-        self.total_folders = len(folder_counts)
+        self.total_folders = len(folder_files)
 
-    def file_completed(self, local_path: Path) -> str | None:
+    def file_completed(self, local_path: Path) -> tuple[str, bool] | None:
         """
-        Mark a file as completed. Returns folder name if folder is now complete.
+        Mark a file as completed. Returns (folder_name, is_chart) if folder is now complete.
         """
         with self.lock:
             if self._closed:
@@ -130,12 +144,14 @@ class FolderProgress:
 
                 # Check if folder is complete
                 if self.folder_progress[folder]["completed"] >= self.folder_progress[folder]["expected"]:
-                    self.completed_folders += 1
-                    return local_path.parent.name  # Return just the folder name
+                    is_chart = self.folder_progress[folder]["is_chart"]
+                    if is_chart:
+                        self.completed_charts += 1
+                    return (local_path.parent.name, is_chart)
 
             return None
 
-    def print_folder_complete(self, folder_name: str):
+    def print_folder_complete(self, folder_name: str, is_chart: bool):
         """Print progress when a folder completes."""
         with self.lock:
             if self._closed:
@@ -145,10 +161,13 @@ class FolderProgress:
             elapsed = time.time() - self.start_time
             rate = self.completed_files / elapsed if elapsed > 0 else 0
 
-            pct = (self.completed_folders / self.total_folders * 100) if self.total_folders > 0 else 0
+            pct = (self.completed_charts / self.total_charts * 100) if self.total_charts > 0 else 0
 
-            # Simple format: percentage, counts, folder name
-            core = f"  {pct:5.1f}% ({self.completed_folders}/{self.total_folders} charts, {rate:.1f} files/s)"
+            # Show chart count for charts, just "folder" for non-charts
+            if is_chart:
+                core = f"  {pct:5.1f}% ({self.completed_charts}/{self.total_charts} charts, {rate:.1f} files/s)"
+            else:
+                core = f"  {pct:5.1f}% ({self.completed_charts}/{self.total_charts} charts, {rate:.1f} files/s)  [folder]"
 
             remaining = term_width - len(core) - 5
             if remaining > 10:
@@ -389,9 +408,10 @@ class FileDownloader:
                         if result.success:
                             downloaded += 1
                             if progress:
-                                completed_folder = progress.file_completed(task.local_path)
-                                if completed_folder:
-                                    progress.print_folder_complete(completed_folder)
+                                completed_info = progress.file_completed(task.local_path)
+                                if completed_info:
+                                    folder_name, is_chart = completed_info
+                                    progress.print_folder_complete(folder_name, is_chart)
                         else:
                             errors += 1
                             if progress:
@@ -424,7 +444,7 @@ class FileDownloader:
             if progress:
                 progress.close()
             if cancelled:
-                print(f"  Cancelled. Downloaded {downloaded} files ({progress.completed_folders if progress else 0} complete charts).")
+                print(f"  Cancelled. Downloaded {downloaded} files ({progress.completed_charts if progress else 0} complete charts).")
 
         return downloaded, 0, errors, cancelled
 
