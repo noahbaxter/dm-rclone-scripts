@@ -39,6 +39,8 @@ jobs:
           gh release download manifest --pattern "manifest.json" --clobber || echo "No existing manifest, will do full scan"
 
       - name: Run manifest generator
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
           # Check if manifest exists AND has folder data (not just a token stub)
           if [ -f manifest.json ] && python -c "import json; m=json.load(open('manifest.json')); exit(0 if m.get('folders') else 1)"; then

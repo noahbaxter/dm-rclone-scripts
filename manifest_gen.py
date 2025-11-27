@@ -6,6 +6,7 @@ Generates the manifest.json file containing the complete file tree.
 Supports incremental updates via Google Drive Changes API.
 """
 
+import os
 import sys
 import time
 import argparse
@@ -28,7 +29,7 @@ from src.manifest import FolderEntry
 # Configuration
 # ============================================================================
 
-API_KEY = "REDACTED_API_KEY"
+API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 MANIFEST_PATH = Path(__file__).parent / "manifest.json"
 
 # Root folders to scan

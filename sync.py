@@ -30,7 +30,7 @@ from src.drive_client import DriveClientConfig
 # Configuration
 # ============================================================================
 
-API_KEY = "REDACTED_API_KEY"
+API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 MANIFEST_URL = "https://github.com/noahbaxter/dm-rclone-scripts/releases/download/manifest/manifest.json"
 
 # ============================================================================
