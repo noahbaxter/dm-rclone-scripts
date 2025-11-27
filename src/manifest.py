@@ -46,16 +46,30 @@ class FolderEntry:
     file_count: int = 0
     total_size: int = 0
     files: list = field(default_factory=list)
+    # Chart statistics
+    chart_count: int = 0
+    charts: dict = field(default_factory=dict)  # {"folder": N, "zip": N, "sng": N, "total": N}
+    subfolders: list = field(default_factory=list)  # List of subfolder stats
+    # Completion status (False if scan was interrupted)
+    complete: bool = True
 
     def to_dict(self) -> dict:
-        return {
+        result = {
             "name": self.name,
             "folder_id": self.folder_id,
             "description": self.description,
             "file_count": self.file_count,
             "total_size": self.total_size,
             "files": [f.to_dict() if isinstance(f, FileEntry) else f for f in self.files],
+            "complete": self.complete,
         }
+        # Include chart stats if present
+        if self.chart_count > 0 or self.charts:
+            result["chart_count"] = self.chart_count
+            result["charts"] = self.charts
+        if self.subfolders:
+            result["subfolders"] = self.subfolders
+        return result
 
     @classmethod
     def from_dict(cls, data: dict) -> "FolderEntry":
@@ -66,6 +80,10 @@ class FolderEntry:
             file_count=data.get("file_count", 0),
             total_size=data.get("total_size", 0),
             files=data.get("files", []),
+            chart_count=data.get("chart_count", 0),
+            charts=data.get("charts", {}),
+            subfolders=data.get("subfolders", []),
+            complete=data.get("complete", True),  # Default True for backwards compat
         )
 
 
@@ -160,6 +178,18 @@ class Manifest:
     def get_folder_ids(self) -> set:
         """Get set of all folder IDs in manifest."""
         return {f.folder_id for f in self.folders}
+
+    def get_complete_folder_ids(self) -> set:
+        """Get set of folder IDs that have been fully scanned."""
+        return {f.folder_id for f in self.folders if f.complete}
+
+    def get_incomplete_folder_ids(self) -> set:
+        """Get set of folder IDs that were partially scanned."""
+        return {f.folder_id for f in self.folders if not f.complete}
+
+    def all_complete(self) -> bool:
+        """Check if all folders in manifest are fully scanned."""
+        return all(f.complete for f in self.folders)
 
     def add_folder(self, folder: FolderEntry):
         """Add or replace a folder entry."""
