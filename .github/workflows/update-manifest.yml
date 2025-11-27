@@ -1,0 +1,48 @@
+name: Update Manifest
+
+on:
+  # Run daily at 6 AM UTC
+  schedule:
+    - cron: '0 6 * * *'
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  update-manifest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Set up OAuth credentials
+        run: |
+          echo '${{ secrets.GOOGLE_CREDENTIALS }}' > credentials.json
+          echo '${{ secrets.GOOGLE_TOKEN }}' > token.json
+
+      - name: Run manifest generator
+        run: python manifest_gen.py
+
+      - name: Upload manifest to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Create release if it doesn't exist
+          gh release view manifest || gh release create manifest --title "Manifest" --notes "Auto-updated manifest for chart sync"
+
+          # Upload/replace the manifest asset
+          gh release upload manifest manifest.json --clobber
+
+      - name: Summary
+        run: |
+          echo "### Manifest Updated" >> $GITHUB_STEP_SUMMARY
+          echo "- Size: $(du -h manifest.json | cut -f1)" >> $GITHUB_STEP_SUMMARY
+          echo "- Files: $(python -c "import json; m=json.load(open('manifest.json')); print(sum(f.get('file_count',0) for f in m.get('folders',[])))")" >> $GITHUB_STEP_SUMMARY

@@ -31,7 +31,7 @@ from src.drive_client import DriveClientConfig
 # ============================================================================
 
 API_KEY = "REDACTED_API_KEY"
-MANIFEST_URL = "https://raw.githubusercontent.com/noahbaxter/dm-rclone-scripts/main/manifest.json"
+MANIFEST_URL = "https://github.com/noahbaxter/dm-rclone-scripts/releases/download/manifest/manifest.json"
 
 # ============================================================================
 # Utilities

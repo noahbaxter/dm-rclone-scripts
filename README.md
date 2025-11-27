@@ -37,26 +37,25 @@ This eliminates the need for every user to scan Google Drive (which would use th
 
 ## For Admins
 
-### Updating the Manifest
+### Automatic Manifest Updates (GitHub Actions)
 
-When charts are added/updated, run:
+The manifest is automatically updated daily via GitHub Actions and stored as a release asset.
+
+**To trigger manually:** Go to Actions → "Update Manifest" → Run workflow
+
+**First-time setup:**
+1. Create OAuth credentials at [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+2. Run `python manifest_gen.py` locally once to generate `token.json`
+3. Add GitHub Secrets:
+   - `GOOGLE_CREDENTIALS`: Contents of `credentials.json`
+   - `GOOGLE_TOKEN`: Contents of `token.json`
+
+### Manual Updates
 
 ```bash
-python manifest_gen.py
-```
-
-This uses the Changes API to detect only what changed (~1 API call if nothing changed).
-
-**First time setup:**
-1. Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
-2. Create OAuth 2.0 Client ID (Desktop app type)
-3. Download the JSON and save as `credentials.json`
-4. Run the script (browser opens for one-time authentication)
-
-**Other modes:**
-```bash
-python manifest_gen.py --full   # Full scan with resume support
-python manifest_gen.py --force  # Force complete rescan (~16k API calls)
+python manifest_gen.py          # Incremental (~1 API call)
+python manifest_gen.py --full   # Full scan with resume
+python manifest_gen.py --force  # Force complete rescan
 ```
 
 ### Building the Windows Executable
