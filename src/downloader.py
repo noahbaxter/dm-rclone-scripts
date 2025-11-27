@@ -157,17 +157,14 @@ class FolderProgress:
             if self._closed:
                 return
 
-            term_width = shutil.get_terminal_size().columns
-            elapsed = time.time() - self.start_time
-            rate = self.completed_files / elapsed if elapsed > 0 else 0
+            # Only print charts, skip non-chart folders silently
+            if not is_chart:
+                return
 
+            term_width = shutil.get_terminal_size().columns
             pct = (self.completed_charts / self.total_charts * 100) if self.total_charts > 0 else 0
 
-            # Show chart count for charts, just "folder" for non-charts
-            if is_chart:
-                core = f"  {pct:5.1f}% ({self.completed_charts}/{self.total_charts} charts, {rate:.1f} files/s)"
-            else:
-                core = f"  {pct:5.1f}% ({self.completed_charts}/{self.total_charts} charts, {rate:.1f} files/s)  [folder]"
+            core = f"  {pct:5.1f}% ({self.completed_charts}/{self.total_charts})"
 
             remaining = term_width - len(core) - 5
             if remaining > 10:
