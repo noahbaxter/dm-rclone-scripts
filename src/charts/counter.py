@@ -138,55 +138,49 @@ def _count_charts_in_subfolder(files: List[dict], subfolder_name: str) -> ChartC
     """
     Count charts within a subfolder's files.
 
-    Files are expected to have paths relative to the drive root,
-    so we need to look at the structure after the subfolder name.
+    Charts can be at any depth within the subfolder. We identify charts by:
+    - Folders containing song.ini or notes.mid/chart (folder charts)
+    - .sng files (sng charts)
+    - .zip/.rar/.7z files (zip charts)
     """
     counts = ChartCounts()
 
-    # Group files by their chart folder (second level after subfolder)
-    # e.g., "DM 2024/Artist - Song/notes.mid" -> chart folder is "Artist - Song"
-    chart_folders: Dict[str, List[str]] = defaultdict(list)
-    standalone_files: List[str] = []
+    # Group files by their parent folder (at any depth)
+    # e.g., "Charter/Sub/Artist - Song/notes.mid" -> parent is "Charter/Sub/Artist - Song"
+    files_by_parent: Dict[str, List[str]] = defaultdict(list)
 
     for f in files:
         path = f.get("path", "")
         parts = Path(path).parts
 
-        if len(parts) <= 1:
-            # Shouldn't happen if files are from a subfolder, but handle it
-            standalone_files.append(path)
+        if len(parts) < 2:
             continue
 
-        # parts[0] is the subfolder name, parts[1] is the chart folder or file
-        if len(parts) == 2:
-            # File directly in subfolder (e.g., "DM 2024/something.sng")
-            standalone_files.append(parts[1])
-        else:
-            # File in a chart subfolder (e.g., "DM 2024/Artist - Song/notes.mid")
-            chart_folder = parts[1]
-            filename = parts[-1].lower()
-            chart_folders[chart_folder].append(filename)
+        # Get the parent folder path (everything except the filename)
+        parent = "/".join(parts[:-1])
+        filename = parts[-1].lower()
+        files_by_parent[parent].append(filename)
 
-    # Count standalone files (zip/sng at subfolder root)
-    for filename in standalone_files:
-        lower_name = filename.lower()
-        if lower_name.endswith(SNG_EXTENSION):
-            counts.sng += 1
-        elif any(lower_name.endswith(ext) for ext in ZIP_EXTENSIONS):
-            counts.zip += 1
+    # Find chart folders at any depth
+    chart_folders_found = set()
 
-    # Count chart folders
-    for chart_folder, filenames in chart_folders.items():
-        chart_type = _detect_chart_type_from_filenames(filenames)
-        if chart_type is None:
-            continue  # Not a chart folder
-        elif chart_type == ChartType.FOLDER:
-            counts.folder += 1
-        elif chart_type == ChartType.ZIP:
-            counts.zip += 1
-        elif chart_type == ChartType.SNG:
-            counts.sng += 1
+    for parent_path, filenames in files_by_parent.items():
+        # Check for standalone zip/sng files
+        for filename in filenames:
+            if filename.endswith(SNG_EXTENSION):
+                counts.sng += 1
+            elif any(filename.endswith(ext) for ext in ZIP_EXTENSIONS):
+                counts.zip += 1
 
+        # Check if this folder is a chart folder (has song.ini or notes files)
+        filenames_set = set(filenames)
+        has_ini = bool(filenames_set & {f.lower() for f in CHART_INI_FILES})
+        has_notes = bool(filenames_set & {f.lower() for f in CHART_NOTE_FILES})
+
+        if has_ini or has_notes:
+            chart_folders_found.add(parent_path)
+
+    counts.folder = len(chart_folders_found)
     return counts
 
 
