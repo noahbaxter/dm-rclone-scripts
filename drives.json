@@ -1,0 +1,19 @@
+{
+  "drives": [
+    {
+      "name": "BirdmanExe Drive",
+      "folder_id": "1OTcP60EwXnT73FYy-yjbB2C7yU6mVMTf",
+      "description": "BirdmanExe's chart collection"
+    },
+    {
+      "name": "Drummer's Monthly Drive",
+      "folder_id": "1bqsJzbXRkmRda3qJFX3W36UD3Sg_eIVj",
+      "description": "Official Drummer's Monthly charts"
+    },
+    {
+      "name": "DM Meme Drive",
+      "folder_id": "1DuAZ36Fn_T7f_tD2Ak84Q87xZgxwn1gY",
+      "description": "Meme charts and fun stuff"
+    }
+  ]
+}
