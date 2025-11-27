@@ -29,7 +29,7 @@ from src.drive_client import DriveClientConfig
 
 API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 MANIFEST_URL = "https://github.com/noahbaxter/dm-rclone-scripts/releases/download/manifest/manifest.json"
-DOWNLOAD_FOLDER = "Charts"  # Folder next to the app
+DOWNLOAD_FOLDER = "Sync Charts"  # Folder next to the app
 
 
 def get_app_dir() -> Path:

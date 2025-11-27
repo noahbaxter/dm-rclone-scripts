@@ -1,15 +1,20 @@
-name: Build Release
+name: Build and Release
 
 on:
-  # Trigger on version tags
+  # Build on every push to main
   push:
-    tags:
-      - 'v*'
-  # Allow manual trigger
+    branches:
+      - main
+  # Manual trigger for releasing
   workflow_dispatch:
     inputs:
+      release:
+        description: 'Create a release?'
+        required: true
+        type: boolean
+        default: false
       version:
-        description: 'Version tag (e.g., v2.0.0)'
+        description: 'Version tag (e.g., v2.0.0) - required if releasing'
         required: false
         default: ''
 
@@ -76,6 +81,8 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    # Only run release job when manually triggered with release=true
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true'
 
     steps:
       - name: Download all artifacts
@@ -86,9 +93,7 @@ jobs:
       - name: Determine version
         id: version
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "version=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-          elif [ -n "${{ github.event.inputs.version }}" ]; then
+          if [ -n "${{ github.event.inputs.version }}" ]; then
             echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
           else
             echo "version=v$(date +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
