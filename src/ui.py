@@ -30,15 +30,6 @@ def extract_folder_id(url_or_id: str) -> str | None:
     return None
 
 
-def print_header():
-    """Print application header."""
-    print("=" * 50)
-    print("  DM Chart Sync v2.0")
-    print("  Download charts without any setup!")
-    print("=" * 50)
-    print()
-
-
 def show_main_menu(folders: list, config: UserConfig) -> str:
     """
     Show main menu and get user selection.
@@ -168,7 +159,7 @@ def remove_custom_folder(config: UserConfig) -> bool:
             pass
         return False
 
-    menu = Menu(title="Remove Custom Folder")
+    menu = Menu(title="Remove Custom Folder", show_header=False)
 
     for i, folder in enumerate(config.custom_folders, 1):
         hotkey = str(i) if i <= 9 else None
@@ -229,7 +220,8 @@ def show_purge_menu(all_folders: list) -> str:
     """Show purge menu and get selection. Returns 'C' if cancelled."""
     menu = Menu(
         title="Purge Extra Files",
-        footer="Removes files not in manifest"
+        footer="Removes files not in manifest",
+        show_header=False
     )
 
     # Add official folders only

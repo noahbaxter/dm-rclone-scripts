@@ -19,7 +19,6 @@ from src import (
     FolderSync,
     purge_extra_files,
     clear_screen,
-    print_header,
     show_main_menu,
     show_purge_menu,
     add_custom_folder,
@@ -128,12 +127,10 @@ class SyncApp:
     def run(self):
         """Main application loop."""
         clear_screen()
-        print_header()
         self.load_manifest()
 
         while True:
             clear_screen()
-            print_header()
 
             all_folders = self.get_all_folders()
 

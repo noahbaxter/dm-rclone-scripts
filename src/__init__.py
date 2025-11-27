@@ -28,7 +28,6 @@ from .charts import (
 )
 from .ui import (
     clear_screen,
-    print_header,
     show_main_menu,
     show_purge_menu,
     add_custom_folder,
@@ -63,7 +62,6 @@ __all__ = [
     "detect_chart_type",
     "create_chart",
     "clear_screen",
-    "print_header",
     "show_main_menu",
     "show_purge_menu",
     "add_custom_folder",
