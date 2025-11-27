@@ -12,6 +12,7 @@ token.json
 
 # User config
 dm_sync_config.json
+manifest.json
 
 # OS
 .DS_Store
