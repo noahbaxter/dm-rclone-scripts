@@ -12,7 +12,7 @@ import shutil
 from dataclasses import dataclass, field
 from typing import Any
 
-from .keyboard import getch, KEY_UP, KEY_DOWN, KEY_ENTER, KEY_ESC
+from .keyboard import getch, KEY_UP, KEY_DOWN, KEY_ENTER, KEY_ESC, KEY_SPACE
 
 
 def clear_screen():
@@ -62,8 +62,11 @@ class Colors:
     PURPLE = "\x1b[38;2;138;43;226m"
     INDIGO = "\x1b[38;2;99;102;241m"
     PINK = "\x1b[38;2;244;114;182m"
+    PINK_DIM = "\x1b[38;2;150;70;110m"  # Darker pink for disabled selected items
+    DIM_HOVER = "\x1b[38;2;140;150;160m"  # Slightly brighter text for hovered disabled items
     HOTKEY = "\x1b[38;2;167;139;250m"
     MUTED = "\x1b[38;2;148;163;184m"
+    MUTED_DIM = "\x1b[38;2;90;100;110m"  # Darker muted for disabled descriptions
 
 
 def rgb(r: int, g: int, b: int) -> str:
@@ -148,6 +151,7 @@ class MenuItem:
     hotkey: str | None = None
     value: Any = None
     description: str | None = None
+    disabled: bool = False  # If True, render with grey/dim style
 
     def __post_init__(self):
         if self.value is None:
@@ -162,6 +166,17 @@ class MenuDivider:
 @dataclass
 class MenuAction(MenuItem):
     pass
+
+
+@dataclass
+class MenuResult:
+    """Result from menu selection."""
+    item: MenuItem | MenuAction
+    action: str  # "enter" or "space"
+
+    @property
+    def value(self):
+        return self.item.value
 
 
 def check_resize() -> bool:
@@ -179,8 +194,10 @@ class Menu:
 
     title: str = ""
     footer: str = ""
+    space_hint: str = ""  # Hint for spacebar action, e.g. "Toggle"
     items: list = field(default_factory=list)
     _selected: int = 0
+    _selected_before_hotkey: int = 0  # Position before hotkey was pressed
 
     def add_item(self, item):
         self.items.append(item)
@@ -222,17 +239,35 @@ class Menu:
                 print(_box_row(BOX_TL_DIV, BOX_H, BOX_TR_DIV, w, c))
             elif isinstance(item, (MenuItem, MenuAction)):
                 selected = (i == self._selected)
+                is_disabled = getattr(item, 'disabled', False)
 
-                # Build content
-                hotkey = f"{Colors.HOTKEY}[{item.hotkey}]{Colors.RESET} " if item.hotkey else "    "
-                label = item.label
-                if item.description:
-                    label += f" {Colors.MUTED}({item.description}){Colors.RESET}"
-
-                if selected:
-                    content = f"{Colors.PINK}▸{Colors.RESET} {hotkey}{Colors.BOLD}{label}{Colors.RESET}"
+                # Build content based on enabled/disabled and selected state
+                if is_disabled:
+                    # Disabled items - dimmed text and darker description
+                    if selected:
+                        # Slightly brighter text when hovered
+                        hotkey = f"{Colors.DIM_HOVER}[{item.hotkey}]{Colors.RESET} " if item.hotkey else "    "
+                        label = f"{Colors.DIM_HOVER}{item.label}{Colors.RESET}"
+                        if item.description:
+                            label += f" {Colors.MUTED_DIM}({item.description}){Colors.RESET}"
+                        content = f"{Colors.PINK_DIM}▸{Colors.RESET} {hotkey}{label}"
+                    else:
+                        hotkey = f"{Colors.DIM}[{item.hotkey}]{Colors.RESET} " if item.hotkey else "    "
+                        label = f"{Colors.DIM}{item.label}{Colors.RESET}"
+                        if item.description:
+                            label += f" {Colors.MUTED_DIM}({item.description}){Colors.RESET}"
+                        content = f"  {hotkey}{label}"
                 else:
-                    content = f"  {hotkey}{label}"
+                    # Enabled items - normal colors
+                    hotkey = f"{Colors.HOTKEY}[{item.hotkey}]{Colors.RESET} " if item.hotkey else "    "
+                    label = item.label
+                    if item.description:
+                        label += f" {Colors.MUTED}({item.description}){Colors.RESET}"
+
+                    if selected:
+                        content = f"{Colors.PINK}▸{Colors.RESET} {hotkey}{Colors.BOLD}{label}{Colors.RESET}"
+                    else:
+                        content = f"  {hotkey}{label}"
 
                 visible = len(strip_ansi(content))
                 pad = w - 4 - visible
@@ -249,15 +284,28 @@ class Menu:
         print(_box_row(BOX_BL, BOX_H, BOX_BR, w, c))
 
         # Hint
-        print(f"  {Colors.MUTED}↑/↓ Navigate  {Colors.HOTKEY}Enter{Colors.MUTED} Select  {Colors.HOTKEY}Esc{Colors.MUTED} Cancel{Colors.RESET}")
+        hint = f"  {Colors.MUTED}↑/↓ Navigate  {Colors.HOTKEY}Enter{Colors.MUTED} Select"
+        if self.space_hint:
+            hint += f"  {Colors.HOTKEY}Space{Colors.MUTED} {self.space_hint}"
+        hint += f"  {Colors.HOTKEY}Esc{Colors.MUTED} Cancel{Colors.RESET}"
+        print(hint)
 
-    def run(self) -> MenuItem | MenuAction | None:
-        """Run menu, returns selected item or None if cancelled."""
+    def run(self, initial_index: int = 0) -> MenuResult | None:
+        """Run menu, returns MenuResult or None if cancelled.
+
+        Args:
+            initial_index: Index to start selection at (for maintaining position)
+        """
         selectable = self._selectable()
         if not selectable:
             return None
 
-        self._selected = selectable[0]
+        # Use initial_index if valid, otherwise start at first item
+        if initial_index in selectable:
+            self._selected = initial_index
+        else:
+            self._selected = selectable[0]
+
         hotkeys = {item.hotkey.upper(): i for i, item in enumerate(self.items)
                    if isinstance(item, (MenuItem, MenuAction)) and item.hotkey}
 
@@ -294,15 +342,19 @@ class Menu:
                     self._render()
 
             elif key == KEY_ENTER:
-                return self.items[self._selected]
+                return MenuResult(self.items[self._selected], "enter")
+
+            elif key == KEY_SPACE:
+                return MenuResult(self.items[self._selected], "space")
 
             elif isinstance(key, str) and len(key) == 1:
                 upper = key.upper()
                 if upper in hotkeys:
+                    self._selected_before_hotkey = self._selected  # Save position before hotkey
                     self._selected = hotkeys[upper]
-                    return self.items[self._selected]
+                    return MenuResult(self.items[self._selected], "enter")
                 if key.isdigit() and key != '0':
                     idx = int(key)
                     if idx <= len(selectable):
                         self._selected = selectable[idx - 1]
-                        return self.items[self._selected]
+                        return MenuResult(self.items[self._selected], "enter")

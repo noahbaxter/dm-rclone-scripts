@@ -36,6 +36,7 @@ KEY_ENTER = "KEY_ENTER"
 KEY_ESC = "KEY_ESC"
 KEY_BACKSPACE = "KEY_BACKSPACE"
 KEY_TAB = "KEY_TAB"
+KEY_SPACE = "KEY_SPACE"
 
 
 def getch(return_special_keys: bool = False) -> str:
@@ -82,6 +83,8 @@ def getch(return_special_keys: bool = False) -> str:
             return KEY_BACKSPACE if return_special_keys else '\x08'
         if ch == b'\t':
             return KEY_TAB if return_special_keys else '\t'
+        if ch == b' ':
+            return KEY_SPACE if return_special_keys else ' '
         return ch.decode('utf-8', errors='ignore')
     else:
         # Unix/Mac
@@ -102,6 +105,10 @@ def getch(return_special_keys: bool = False) -> str:
             # Handle tab
             if ch == '\t':
                 return KEY_TAB if return_special_keys else ch
+
+            # Handle space
+            if ch == ' ':
+                return KEY_SPACE if return_special_keys else ch
 
             # Check if this is an escape sequence (arrow keys, etc.)
             if ch == '\x1b':
