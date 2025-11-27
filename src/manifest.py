@@ -237,3 +237,52 @@ class Manifest:
                 fid = file_entry.get("id") if isinstance(file_entry, dict) else file_entry.id
                 lookup[fid] = (fi, fli)
         return lookup
+
+    def print_tree(self):
+        """Print a tree view of manifest contents."""
+        def format_size(size_bytes: int) -> str:
+            if size_bytes < 1024:
+                return f"{size_bytes}B"
+            elif size_bytes < 1024 * 1024:
+                return f"{size_bytes / 1024:.1f}KB"
+            elif size_bytes < 1024 * 1024 * 1024:
+                return f"{size_bytes / (1024 * 1024):.1f}MB"
+            else:
+                return f"{size_bytes / (1024 * 1024 * 1024):.1f}GB"
+
+        total_charts = 0
+        total_size = 0
+
+        for folder in self.folders:
+            charts = folder.charts or {}
+            chart_count = charts.get("total", folder.chart_count)
+            total_charts += chart_count
+            total_size += folder.total_size
+
+            status = "" if folder.complete else " [incomplete]"
+            print(f"{folder.name} ({chart_count} charts, {format_size(folder.total_size)}){status}")
+
+            # Sort subfolders by chart count descending
+            if folder.subfolders:
+                sorted_subs = sorted(
+                    folder.subfolders,
+                    key=lambda x: x.get("charts", {}).get("total", 0),
+                    reverse=True
+                )
+                for sf in sorted_subs:
+                    sf_charts = sf.get("charts", {}).get("total", 0)
+                    sf_size = sf.get("total_size", 0)
+                    print(f"  {sf.get('name', '?')} ({sf_charts} charts, {format_size(sf_size)})")
+
+        print()
+        print(f"Total: {total_charts} charts, {format_size(total_size)}")
+
+
+if __name__ == "__main__":
+    import sys
+    manifest_path = Path(__file__).parent.parent / "manifest.json"
+    if not manifest_path.exists():
+        print(f"Manifest not found: {manifest_path}")
+        sys.exit(1)
+    manifest = Manifest.load(manifest_path)
+    manifest.print_tree()
