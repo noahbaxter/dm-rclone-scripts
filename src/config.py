@@ -21,6 +21,7 @@ class DriveConfig:
     folder_id: str
     description: str = ""
     group: str = ""  # Optional group name for categorization
+    hidden: bool = False  # If True, hide from sync UI (still in manifest)
 
     def to_dict(self) -> dict:
         d = {
@@ -30,6 +31,8 @@ class DriveConfig:
         }
         if self.group:
             d["group"] = self.group
+        if self.hidden:
+            d["hidden"] = self.hidden
         return d
 
     @classmethod
@@ -39,6 +42,7 @@ class DriveConfig:
             folder_id=data.get("folder_id", ""),
             description=data.get("description", ""),
             group=data.get("group", ""),
+            hidden=data.get("hidden", False),
         )
 
 
@@ -90,23 +94,30 @@ class DrivesConfig:
         """Convert to the ROOT_FOLDERS format used by manifest_gen.py."""
         return [d.to_dict() for d in self.drives]
 
-    def get_groups(self) -> list[str]:
+    def get_visible_drives(self) -> list[DriveConfig]:
+        """Get drives that are not hidden."""
+        return [d for d in self.drives if not d.hidden]
+
+    def get_groups(self, visible_only: bool = True) -> list[str]:
         """Get unique group names in order of first appearance."""
         seen = set()
         groups = []
-        for drive in self.drives:
+        drives = self.get_visible_drives() if visible_only else self.drives
+        for drive in drives:
             if drive.group and drive.group not in seen:
                 seen.add(drive.group)
                 groups.append(drive.group)
         return groups
 
-    def get_drives_in_group(self, group: str) -> list[DriveConfig]:
+    def get_drives_in_group(self, group: str, visible_only: bool = True) -> list[DriveConfig]:
         """Get all drives in a specific group."""
-        return [d for d in self.drives if d.group == group]
+        drives = self.get_visible_drives() if visible_only else self.drives
+        return [d for d in drives if d.group == group]
 
-    def get_ungrouped_drives(self) -> list[DriveConfig]:
+    def get_ungrouped_drives(self, visible_only: bool = True) -> list[DriveConfig]:
         """Get drives that don't belong to any group."""
-        return [d for d in self.drives if not d.group]
+        drives = self.get_visible_drives() if visible_only else self.drives
+        return [d for d in drives if not d.group]
 
 
 class UserSettings:

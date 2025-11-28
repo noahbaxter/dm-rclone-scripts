@@ -19,22 +19,31 @@
       "group": "Drums"
     },
     {
+      "name": "Joshwantsmaccas",
+      "folder_id": "1vMmyVC_gvCsepXbe0U_DbbHuhujVMrO3",
+      "description": "Joshwantsmaccas's chart collection",
+      "group": "Drums"
+    },
+    {
       "name": "Rock Band Mainline (1, 2, 3, 4)",
       "folder_id": "1JAAAK-cR749gNuNNk3CPQXVYNiynvzzf",
       "description": "Rock Band 1, 2, 3, and 4 exports",
-      "group": "Rock Band"
+      "group": "Rock Band",
+      "hidden": true
     },
     {
       "name": "Rock Band Spinoffs",
       "folder_id": "1D-4hsAKzdB1wr9EWjpocSEggSukDErfn",
       "description": "Beatles, Green Day, Blitz, Rivals, etc.",
-      "group": "Rock Band"
+      "group": "Rock Band",
+      "hidden": true
     },
     {
       "name": "Rock Band DLC & RBN",
       "folder_id": "1HR4hBlYcNiGmxx6qn9VyE5BlgG8hKvQl",
       "description": "Official DLC and Rock Band Network exports",
-      "group": "Rock Band"
+      "group": "Rock Band",
+      "hidden": true
     }
   ]
 }

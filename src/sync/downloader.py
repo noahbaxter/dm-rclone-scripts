@@ -190,11 +190,12 @@ class FileDownloader:
     """
     Parallel file downloader with progress tracking.
 
-    Uses direct Google Drive download URLs instead of the API
-    to avoid authentication requirements for public files.
+    Uses direct Google Drive download URLs. Can optionally use OAuth
+    for files that require authentication.
     """
 
     DOWNLOAD_URL_TEMPLATE = "https://drive.google.com/uc?export=download&id={file_id}&confirm=1"
+    API_DOWNLOAD_URL = "https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
 
     def __init__(
         self,
@@ -202,6 +203,7 @@ class FileDownloader:
         max_retries: int = 3,
         timeout: Tuple[int, int] = (10, 60),
         chunk_size: int = 32768,
+        auth_token: Optional[str] = None,
     ):
         """
         Initialize the downloader.
@@ -211,16 +213,41 @@ class FileDownloader:
             max_retries: Number of retry attempts per file
             timeout: Request timeout (connect, read)
             chunk_size: Download chunk size in bytes
+            auth_token: Optional OAuth token for authenticated downloads
         """
         self.max_workers = max_workers
         self.max_retries = max_retries
         self.timeout = timeout
         self.chunk_size = chunk_size
+        self.auth_token = auth_token
         self._print_lock = threading.Lock()
+
+    def _download_with_auth(self, task: DownloadTask) -> requests.Response:
+        """Download using Drive API with OAuth token."""
+        url = f"{self.API_DOWNLOAD_URL.format(file_id=task.file_id)}&acknowledgeAbuse=true"
+        headers = {"Authorization": f"Bearer {self.auth_token}"}
+        return requests.get(
+            url,
+            stream=True,
+            headers=headers,
+            timeout=self.timeout
+        )
+
+    def _download_public(self, task: DownloadTask) -> requests.Response:
+        """Download using public URL."""
+        url = self.DOWNLOAD_URL_TEMPLATE.format(file_id=task.file_id)
+        return requests.get(
+            url,
+            stream=True,
+            allow_redirects=True,
+            timeout=self.timeout
+        )
 
     def download_file(self, task: DownloadTask) -> DownloadResult:
         """
         Download a single file with retries.
+
+        Tries public URL first, falls back to OAuth if available.
 
         Args:
             task: DownloadTask with file info
@@ -228,26 +255,25 @@ class FileDownloader:
         Returns:
             DownloadResult with success status and message
         """
-        url = self.DOWNLOAD_URL_TEMPLATE.format(file_id=task.file_id)
-
         for attempt in range(self.max_retries):
             try:
-                response = requests.get(
-                    url,
-                    stream=True,
-                    allow_redirects=True,
-                    timeout=self.timeout
-                )
+                # Try public download first
+                response = self._download_public(task)
                 response.raise_for_status()
 
                 # Check if we got HTML instead of the file (auth required)
                 content_type = response.headers.get("content-type", "")
                 if "text/html" in content_type:
-                    return DownloadResult(
-                        success=False,
-                        file_path=task.local_path,
-                        message=f"SKIP (auth required): {task.local_path.name}",
-                    )
+                    # Try authenticated download if we have a token
+                    if self.auth_token:
+                        response = self._download_with_auth(task)
+                        response.raise_for_status()
+                    else:
+                        return DownloadResult(
+                            success=False,
+                            file_path=task.local_path,
+                            message=f"SKIP (auth required): {task.local_path.name}",
+                        )
 
                 # Create parent directories
                 task.local_path.parent.mkdir(parents=True, exist_ok=True)
@@ -278,10 +304,20 @@ class FileDownloader:
 
             except requests.exceptions.HTTPError as e:
                 if hasattr(e, 'response') and e.response.status_code == 403:
+                    # Try to get more detail from response
+                    detail = ""
+                    try:
+                        err_json = e.response.json()
+                        detail = err_json.get("error", {}).get("message", "")
+                    except Exception:
+                        pass
+                    msg = f"SKIP (access denied): {task.local_path.name}"
+                    if detail:
+                        msg += f" - {detail}"
                     return DownloadResult(
                         success=False,
                         file_path=task.local_path,
-                        message=f"SKIP (access denied): {task.local_path.name}",
+                        message=msg,
                     )
                 if attempt < self.max_retries - 1:
                     continue

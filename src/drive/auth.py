@@ -60,8 +60,8 @@ class OAuthManager:
 
     @property
     def is_configured(self) -> bool:
-        """Check if OAuth credentials are available."""
-        return self.credentials_path.exists()
+        """Check if OAuth credentials or token are available."""
+        return self.credentials_path.exists() or self.token_path.exists()
 
     @property
     def has_token(self) -> bool:
@@ -76,9 +76,6 @@ class OAuthManager:
             Credentials object or None if not available
         """
         if not OAUTH_AVAILABLE:
-            return None
-
-        if not self.is_configured:
             return None
 
         creds = None
@@ -100,8 +97,8 @@ class OAuthManager:
             except Exception:
                 creds = None
 
-        # Get new credentials if needed
-        if not creds or not creds.valid:
+        # Get new credentials via interactive flow if needed (requires credentials.json)
+        if (not creds or not creds.valid) and self.credentials_path.exists():
             try:
                 flow = InstalledAppFlow.from_client_secrets_file(
                     str(self.credentials_path),

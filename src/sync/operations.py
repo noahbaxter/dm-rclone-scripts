@@ -131,9 +131,9 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
 class FolderSync:
     """Handles syncing folders from Google Drive to local disk."""
 
-    def __init__(self, client: DriveClient):
+    def __init__(self, client: DriveClient, auth_token: str = None):
         self.client = client
-        self.downloader = FileDownloader()
+        self.downloader = FileDownloader(auth_token=auth_token)
 
     def sync_folder(
         self,

@@ -17,6 +17,7 @@ from src import (
     DriveClient,
     Manifest,
     FolderSync,
+    OAuthManager,
     purge_all_folders,
     clear_screen,
     print_header,
@@ -105,7 +106,14 @@ class SyncApp:
     def __init__(self, use_local_manifest: bool = False):
         client_config = DriveClientConfig(api_key=API_KEY)
         self.client = DriveClient(client_config)
-        self.sync = FolderSync(self.client)
+
+        # Get OAuth token for authenticated downloads if available
+        auth_token = None
+        auth = OAuthManager()
+        if auth.is_available and auth.is_configured:
+            auth_token = auth.get_token()
+
+        self.sync = FolderSync(self.client, auth_token=auth_token)
         self.folders = []
         self.user_settings = UserSettings.load(get_user_settings_path())
         self.drives_config = DrivesConfig.load(get_drives_config_path())
@@ -118,7 +126,13 @@ class SyncApp:
         else:
             print("Fetching folder list...")
         manifest_data = fetch_manifest(use_local=self.use_local_manifest)
-        self.folders = manifest_data.get("folders", [])
+
+        # Filter out hidden drives
+        hidden_ids = {d.folder_id for d in self.drives_config.drives if d.hidden}
+        self.folders = [
+            f for f in manifest_data.get("folders", [])
+            if f.get("folder_id") not in hidden_ids
+        ]
 
     def handle_download(self, indices: list):
         """Handle folder download."""
