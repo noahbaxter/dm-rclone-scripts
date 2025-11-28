@@ -137,6 +137,8 @@ class UserSettings:
         self.subfolder_toggles: dict[str, dict[str, bool]] = {}
         # Group expanded state: { group_name: expanded_bool }
         self.group_expanded: dict[str, bool] = {}
+        # Whether to delete video files from extracted archive charts
+        self.delete_videos: bool = True
 
     @classmethod
     def load(cls, path: Path) -> "UserSettings":
@@ -151,6 +153,7 @@ class UserSettings:
                 settings.drive_toggles = data.get("drive_toggles", {})
                 settings.subfolder_toggles = data.get("subfolder_toggles", {})
                 settings.group_expanded = data.get("group_expanded", {})
+                settings.delete_videos = data.get("delete_videos", True)
             except (json.JSONDecodeError, IOError):
                 pass
 
@@ -162,6 +165,7 @@ class UserSettings:
             "drive_toggles": self.drive_toggles,
             "subfolder_toggles": self.subfolder_toggles,
             "group_expanded": self.group_expanded,
+            "delete_videos": self.delete_videos,
         }
         with open(self.path, "w") as f:
             json.dump(data, f, indent=2)

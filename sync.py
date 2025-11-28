@@ -107,16 +107,22 @@ class SyncApp:
         client_config = DriveClientConfig(api_key=API_KEY)
         self.client = DriveClient(client_config)
 
+        # Load user settings first (needed for sync options)
+        self.user_settings = UserSettings.load(get_user_settings_path())
+        self.drives_config = DrivesConfig.load(get_drives_config_path())
+
         # Get OAuth token for authenticated downloads if available
         auth_token = None
         auth = OAuthManager()
         if auth.is_available and auth.is_configured:
             auth_token = auth.get_token()
 
-        self.sync = FolderSync(self.client, auth_token=auth_token)
+        self.sync = FolderSync(
+            self.client,
+            auth_token=auth_token,
+            delete_videos=self.user_settings.delete_videos
+        )
         self.folders = []
-        self.user_settings = UserSettings.load(get_user_settings_path())
-        self.drives_config = DrivesConfig.load(get_drives_config_path())
         self.use_local_manifest = use_local_manifest
 
     def load_manifest(self):
@@ -155,13 +161,13 @@ class SyncApp:
         purge_all_folders(self.folders, get_download_path(), self.user_settings)
 
     def handle_configure_drive(self, folder_id: str):
-        """Configure charters for a specific drive."""
+        """Configure setlists for a specific drive."""
         folder = self._get_folder_by_id(folder_id)
         if folder:
             show_subfolder_settings(folder, self.user_settings, get_download_path())
 
     def handle_toggle_drive(self, folder_id: str):
-        """Toggle a drive on/off at the top level (preserves charter settings)."""
+        """Toggle a drive on/off at the top level (preserves setlist settings)."""
         self.user_settings.toggle_drive(folder_id)
         self.user_settings.save()
 

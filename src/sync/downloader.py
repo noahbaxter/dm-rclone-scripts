@@ -4,11 +4,13 @@ File downloader for DM Chart Sync.
 Handles parallel file downloads with progress tracking and retries.
 """
 
+import json
 import os
 import sys
 import shutil
 import threading
 import time
+import zipfile
 from pathlib import Path
 from typing import Callable, Optional, Tuple, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -16,9 +18,34 @@ from dataclasses import dataclass
 
 import requests
 
-from ..constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS
+from ..constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS, VIDEO_EXTENSIONS
 from ..file_ops import file_exists_with_size
 from .progress import ProgressTracker
+
+# Optional archive format support
+try:
+    import py7zr
+    HAS_7Z = True
+except ImportError:
+    HAS_7Z = False
+
+try:
+    from unrar import rarfile as unrar_rarfile
+    # Test that the library is actually available
+    unrar_rarfile.RarFile
+    HAS_RAR_LIB = True
+except (ImportError, LookupError):
+    HAS_RAR_LIB = False
+
+# Check for CLI tools as fallback for RAR extraction
+RAR_CLI_TOOL = None
+for tool in ["unrar", "unar"]:
+    if shutil.which(tool):
+        RAR_CLI_TOOL = tool
+        break
+
+# Checksum file for tracking archive chart state
+CHECKSUM_FILE = "check.txt"
 
 # Platform-specific imports for ESC detection
 if os.name == 'nt':
@@ -76,6 +103,124 @@ class EscMonitor:
             finally:
                 if self._old_settings:
                     termios.tcsetattr(fd, termios.TCSADRAIN, self._old_settings)
+
+
+# =============================================================================
+# Archive handling helpers
+# =============================================================================
+
+def read_checksum(folder_path: Path) -> str:
+    """Read stored MD5 from check.txt."""
+    checksum_path = folder_path / CHECKSUM_FILE
+    if not checksum_path.exists():
+        return ""
+    try:
+        with open(checksum_path) as f:
+            data = json.load(f)
+            return data.get("md5", "")
+    except (json.JSONDecodeError, IOError):
+        return ""
+
+
+def write_checksum(folder_path: Path, md5: str, archive_name: str, extracted_size: int = 0):
+    """Write MD5 and extracted size to check.txt."""
+    checksum_path = folder_path / CHECKSUM_FILE
+    folder_path.mkdir(parents=True, exist_ok=True)
+    with open(checksum_path, "w") as f:
+        json.dump({"md5": md5, "archive": archive_name, "size": extracted_size}, f)
+
+
+def read_checksum_data(folder_path: Path) -> dict:
+    """Read full check.txt data including size."""
+    checksum_path = folder_path / CHECKSUM_FILE
+    if not checksum_path.exists():
+        return {}
+    try:
+        with open(checksum_path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, IOError):
+        return {}
+
+
+def get_folder_size(folder_path: Path) -> int:
+    """Calculate total size of all files in folder (excluding check.txt)."""
+    total = 0
+    for f in folder_path.rglob("*"):
+        if f.is_file() and f.name != CHECKSUM_FILE:
+            try:
+                total += f.stat().st_size
+            except Exception:
+                pass
+    return total
+
+
+def extract_archive(archive_path: Path, dest_folder: Path) -> Tuple[bool, str]:
+    """
+    Extract archive to destination folder.
+
+    Returns (success, error_message).
+    """
+    ext = archive_path.suffix.lower()
+    try:
+        if ext == ".zip":
+            with zipfile.ZipFile(archive_path, 'r') as zf:
+                zf.extractall(dest_folder)
+        elif ext == ".7z":
+            if not HAS_7Z:
+                return False, "py7zr not installed (pip install py7zr)"
+            with py7zr.SevenZipFile(archive_path, 'r') as sz:
+                sz.extractall(dest_folder)
+        elif ext == ".rar":
+            import subprocess
+            if HAS_RAR_LIB:
+                # Use UnRAR library (fastest)
+                with unrar_rarfile.RarFile(str(archive_path)) as rf:
+                    rf.extractall(str(dest_folder))
+            elif RAR_CLI_TOOL == "unrar":
+                # Use unrar CLI
+                result = subprocess.run(
+                    ["unrar", "x", "-o+", str(archive_path), str(dest_folder) + "/"],
+                    capture_output=True, text=True
+                )
+                if result.returncode != 0:
+                    return False, f"unrar failed: {result.stderr}"
+            elif RAR_CLI_TOOL == "unar":
+                # Use unar CLI (macOS)
+                result = subprocess.run(
+                    ["unar", "-f", "-o", str(dest_folder), str(archive_path)],
+                    capture_output=True, text=True
+                )
+                if result.returncode != 0:
+                    return False, f"unar failed: {result.stderr}"
+            else:
+                return False, "RAR support unavailable (install unrar or unar)"
+        else:
+            return False, f"Unknown archive type: {ext}"
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
+def delete_video_files(folder_path: Path) -> int:
+    """
+    Delete video files from folder recursively.
+
+    Returns count of deleted files.
+    """
+    deleted = 0
+    for f in folder_path.rglob("*"):
+        if f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS:
+            try:
+                f.unlink()
+                deleted += 1
+            except Exception:
+                pass  # Non-fatal
+    return deleted
+
+
+def is_archive_file(filename: str) -> bool:
+    """Check if a filename is an archive type we handle."""
+    return any(filename.lower().endswith(ext) for ext in CHART_ARCHIVE_EXTENSIONS)
 
 
 class FolderProgress(ProgressTracker):
@@ -191,6 +336,7 @@ class DownloadTask:
     local_path: Path
     size: int = 0
     md5: str = ""
+    is_archive: bool = False  # If True, needs extraction after download
 
 
 class FileDownloader:
@@ -211,6 +357,7 @@ class FileDownloader:
         timeout: Tuple[int, int] = (10, 60),
         chunk_size: int = 32768,
         auth_token: Optional[str] = None,
+        delete_videos: bool = True,
     ):
         """
         Initialize the downloader.
@@ -221,12 +368,14 @@ class FileDownloader:
             timeout: Request timeout (connect, read)
             chunk_size: Download chunk size in bytes
             auth_token: Optional OAuth token for authenticated downloads
+            delete_videos: Whether to delete video files from extracted archives
         """
         self.max_workers = max_workers
         self.max_retries = max_retries
         self.timeout = timeout
         self.chunk_size = chunk_size
         self.auth_token = auth_token
+        self.delete_videos = delete_videos
         self._print_lock = threading.Lock()
 
     def _download_with_auth(self, task: DownloadTask) -> requests.Response:
@@ -349,6 +498,43 @@ class FileDownloader:
             message=f"ERR: {task.local_path.name} - failed after {self.max_retries} attempts",
         )
 
+    def process_archive(self, task: DownloadTask) -> Tuple[bool, str]:
+        """
+        Process a downloaded archive: extract, write checksum, delete videos, cleanup.
+
+        Args:
+            task: The completed DownloadTask (is_archive should be True)
+
+        Returns:
+            (success, error_message)
+        """
+        archive_path = task.local_path
+        chart_folder = archive_path.parent
+
+        # Extract archive
+        success, error = extract_archive(archive_path, chart_folder)
+        if not success:
+            return False, f"Extract failed: {error}"
+
+        # Delete video files if enabled
+        if self.delete_videos:
+            delete_video_files(chart_folder)
+
+        # Calculate extracted size (after video deletion)
+        extracted_size = get_folder_size(chart_folder)
+
+        # Write checksum with size
+        archive_name = archive_path.name.replace("_download_", "", 1)
+        write_checksum(chart_folder, task.md5, archive_name, extracted_size)
+
+        # Delete the archive
+        try:
+            archive_path.unlink()
+        except Exception:
+            pass  # Non-fatal
+
+        return True, ""
+
     def download_many(
         self,
         tasks: List[DownloadTask],
@@ -425,6 +611,16 @@ class FileDownloader:
                         result = future.result()
 
                         if result.success:
+                            # Process archive if needed
+                            if task.is_archive:
+                                archive_success, archive_error = self.process_archive(task)
+                                if not archive_success:
+                                    errors += 1
+                                    if progress:
+                                        progress.file_completed(task.local_path)
+                                        progress.write(f"  ERR: {task.local_path.parent.name} - {archive_error}")
+                                    continue
+
                             downloaded += 1
                             if progress:
                                 completed_info = progress.file_completed(task.local_path)
@@ -473,7 +669,10 @@ class FileDownloader:
         local_base: Path,
     ) -> Tuple[List[DownloadTask], int]:
         """
-        Filter files that already exist locally with matching size.
+        Filter files that already exist locally.
+
+        For regular files: check if exists with matching size.
+        For archives: check if check.txt has matching MD5.
 
         Args:
             files: List of file dicts with id, path, size keys
@@ -486,17 +685,43 @@ class FileDownloader:
         skipped = 0
 
         for f in files:
-            local_path = local_base / f["path"]
+            file_path = f["path"]
+            file_name = file_path.split("/")[-1] if "/" in file_path else file_path
             file_size = f.get("size", 0)
+            file_md5 = f.get("md5", "")
 
-            if file_exists_with_size(local_path, file_size):
-                skipped += 1
+            if is_archive_file(file_name):
+                # Archive file: check MD5 in check.txt
+                # The chart folder is the parent of where the archive would be
+                local_path = local_base / file_path
+                chart_folder = local_path.parent
+
+                stored_md5 = read_checksum(chart_folder)
+                if stored_md5 and stored_md5 == file_md5:
+                    # Already extracted with matching checksum
+                    skipped += 1
+                else:
+                    # Need to download and extract
+                    # Download to temp location within chart folder
+                    download_path = chart_folder / f"_download_{file_name}"
+                    to_download.append(DownloadTask(
+                        file_id=f["id"],
+                        local_path=download_path,
+                        size=file_size,
+                        md5=file_md5,
+                        is_archive=True,
+                    ))
             else:
-                to_download.append(DownloadTask(
-                    file_id=f["id"],
-                    local_path=local_path,
-                    size=file_size,
-                    md5=f.get("md5", ""),
-                ))
+                # Regular file: check if exists with matching size
+                local_path = local_base / file_path
+                if file_exists_with_size(local_path, file_size):
+                    skipped += 1
+                else:
+                    to_download.append(DownloadTask(
+                        file_id=f["id"],
+                        local_path=local_path,
+                        size=file_size,
+                        md5=file_md5,
+                    ))
 
         return to_download, skipped
