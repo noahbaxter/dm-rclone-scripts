@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
+from .utils import name_sort_key
+
 
 @dataclass
 class FileEntry:
@@ -272,11 +274,11 @@ class Manifest:
                 name = item.get("name", "")
 
             if sort_by == "size":
-                return (-size, name.lower())
+                return (-size, name_sort_key(name))
             elif sort_by == "name":
-                return (name.lower(),)
+                return (name_sort_key(name),)
             else:  # charts (default)
-                return (-chart_count, name.lower())
+                return (-chart_count, name_sort_key(name))
 
         total_charts = 0
         total_size = 0

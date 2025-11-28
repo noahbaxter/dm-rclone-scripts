@@ -11,6 +11,8 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 
+from .utils import sort_by_name
+
 
 @dataclass
 class DriveConfig:
@@ -202,4 +204,4 @@ def extract_subfolders_from_manifest(folder: dict) -> list[str]:
             top_folder = path.split("/")[0]
             subfolders.add(top_folder)
 
-    return sorted(subfolders)
+    return sort_by_name(list(subfolders))

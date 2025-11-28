@@ -16,6 +16,7 @@ from .detector import (
     SNG_EXTENSION,
 )
 from .base import ChartType
+from ..utils import sort_by_name
 
 
 @dataclass
@@ -75,7 +76,7 @@ class DriveStats:
             "file_count": self.file_count,
             "total_size": self.total_size,
             "charts": self.chart_counts.to_dict(),
-            "subfolders": [sf.to_dict() for sf in sorted(self.subfolders.values(), key=lambda x: x.name)],
+            "subfolders": [sf.to_dict() for sf in sort_by_name(list(self.subfolders.values()), key=lambda x: x.name)],
         }
 
 

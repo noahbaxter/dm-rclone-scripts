@@ -3,6 +3,32 @@ Shared utilities for DM Chart Sync.
 """
 
 import os
+from typing import Any, Callable, List, Optional
+
+
+# ============================================================================
+# Sorting utilities
+# ============================================================================
+
+def name_sort_key(name: str) -> str:
+    """Sort key for case-insensitive name sorting."""
+    return name.casefold()
+
+
+def sort_by_name(items: List[Any], key: Optional[Callable[[Any], str]] = None) -> List[Any]:
+    """
+    Sort items by name, case-insensitive.
+
+    Args:
+        items: List of items to sort
+        key: Optional function to extract name from item (default: item itself)
+
+    Returns:
+        Sorted list
+    """
+    if key is None:
+        return sorted(items, key=name_sort_key)
+    return sorted(items, key=lambda x: name_sort_key(key(x)))
 
 
 def clear_screen():
