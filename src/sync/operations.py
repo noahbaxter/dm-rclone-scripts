@@ -4,6 +4,8 @@ Sync operations for DM Chart Sync.
 Handles folder synchronization, file comparison, and purging.
 """
 
+import json
+import os
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -36,6 +38,70 @@ class SyncStatus:
     @property
     def is_synced(self) -> bool:
         return self.synced_charts == self.total_charts
+
+
+def _scan_local_files(folder_path: Path) -> dict[str, int]:
+    """
+    Scan local folder and return dict of {relative_path: size}.
+
+    Uses os.scandir for better performance than individual exists()/stat() calls.
+    """
+    local_files = {}
+    if not folder_path.exists():
+        return local_files
+
+    def scan_dir(dir_path: Path, prefix: str = ""):
+        try:
+            with os.scandir(dir_path) as entries:
+                for entry in entries:
+                    rel_path = f"{prefix}{entry.name}" if prefix else entry.name
+                    if entry.is_file(follow_symlinks=False):
+                        try:
+                            local_files[rel_path] = entry.stat(follow_symlinks=False).st_size
+                        except OSError:
+                            pass
+                    elif entry.is_dir(follow_symlinks=False):
+                        scan_dir(Path(entry.path), f"{rel_path}/")
+        except OSError:
+            pass
+
+    scan_dir(folder_path)
+    return local_files
+
+
+def _scan_checksums(folder_path: Path) -> dict[str, dict]:
+    """
+    Scan for all check.txt files and return dict of {parent_path: checksum_data}.
+
+    Much faster than reading check.txt individually for each chart.
+    """
+    checksums = {}
+    if not folder_path.exists():
+        return checksums
+
+    checksum_file = "check.txt"
+
+    def scan_dir(dir_path: Path, prefix: str = ""):
+        try:
+            with os.scandir(dir_path) as entries:
+                for entry in entries:
+                    if entry.is_file(follow_symlinks=False) and entry.name == checksum_file:
+                        # Found a check.txt - read it
+                        try:
+                            with open(entry.path) as f:
+                                data = json.load(f)
+                                # Store under the parent directory path (without trailing /)
+                                checksums[prefix.rstrip("/")] = data
+                        except (json.JSONDecodeError, IOError):
+                            pass
+                    elif entry.is_dir(follow_symlinks=False):
+                        rel_path = f"{prefix}{entry.name}/" if prefix else f"{entry.name}/"
+                        scan_dir(Path(entry.path), rel_path)
+        except OSError:
+            pass
+
+    scan_dir(folder_path)
+    return checksums
 
 
 def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncStatus:
@@ -78,19 +144,21 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
             file_path = f.get("path", "")
             file_size = f.get("size", 0)
             file_md5 = f.get("md5", "")
-            file_name = file_path.split("/")[-1].lower() if "/" in file_path else file_path.lower()
+
+            # Split once, reuse
+            slash_idx = file_path.rfind("/")
+            if slash_idx == -1:
+                continue  # Skip root-level files
+
+            parent = file_path[:slash_idx]
+            file_name = file_path[slash_idx + 1:].lower()
 
             # Skip files in disabled setlists
             if disabled_setlists:
-                parts = file_path.split("/")
-                if parts and parts[0] in disabled_setlists:
+                first_slash = file_path.find("/")
+                setlist = file_path[:first_slash] if first_slash != -1 else file_path
+                if setlist in disabled_setlists:
                     continue
-
-            # Get parent folder path
-            if "/" in file_path:
-                parent = "/".join(file_path.split("/")[:-1])
-            else:
-                continue  # Skip root-level files
 
             chart_folders[parent]["files"].append((file_path, file_size))
             chart_folders[parent]["total_size"] += file_size
@@ -103,6 +171,10 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
                 chart_folders[parent]["is_chart"] = True
                 chart_folders[parent]["archive_md5"] = file_md5
 
+        # Batch scan: get all local files and checksums upfront
+        local_files = _scan_local_files(folder_path)
+        checksums = _scan_checksums(folder_path)
+
         # Count charts (folders with markers or archives)
         for parent, data in chart_folders.items():
             if not data["is_chart"]:
@@ -113,32 +185,21 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
 
             # For archive charts, check if check.txt has matching MD5
             if data["archive_md5"]:
-                chart_folder = folder_path / parent
-                checksum_data = read_checksum_data(chart_folder)
+                checksum_data = checksums.get(parent, {})
                 if checksum_data.get("md5") == data["archive_md5"]:
                     status.synced_charts += 1
-                    # Use actual extracted size if available, otherwise calculate from folder
+                    # Use actual extracted size if available
                     extracted_size = checksum_data.get("size", 0)
-                    if not extracted_size and chart_folder.exists():
-                        extracted_size = get_folder_size(chart_folder)
                     status.synced_size += extracted_size if extracted_size else data["total_size"]
                 continue
 
-            # For folder charts, check if all files exist locally
+            # For folder charts, check if all files exist locally (using pre-scanned data)
             all_synced = True
-            synced_size = 0
             for file_path, file_size in data["files"]:
-                local_path = folder_path / file_path
-                if local_path.exists():
-                    try:
-                        if local_path.stat().st_size == file_size:
-                            synced_size += file_size
-                        else:
-                            all_synced = False
-                    except Exception:
-                        all_synced = False
-                else:
+                local_size = local_files.get(file_path)
+                if local_size != file_size:
                     all_synced = False
+                    break
 
             if all_synced:
                 status.synced_charts += 1
@@ -428,6 +489,9 @@ def count_purgeable_charts(folders: list, base_path: Path, user_settings=None) -
     total_charts = 0
     total_size = 0
 
+    # Pre-convert to set for faster lookups
+    archive_extensions_set = set(CHART_ARCHIVE_EXTENSIONS)
+
     for folder in folders:
         folder_id = folder.get("folder_id", "")
         folder_name = folder.get("name", "")
@@ -446,26 +510,37 @@ def count_purgeable_charts(folders: list, base_path: Path, user_settings=None) -
                 for f in manifest_files:
                     file_path = f.get("path", "")
                     file_size = f.get("size", 0)
-                    file_name = file_path.split("/")[-1].lower() if "/" in file_path else file_path.lower()
-                    if "/" in file_path:
-                        parent = "/".join(file_path.split("/")[:-1])
-                        chart_folders[parent]["size"] += file_size
-                        if file_name in CHART_MARKERS:
-                            chart_folders[parent]["has_marker"] = True
-                        elif any(file_name.endswith(ext) for ext in CHART_ARCHIVE_EXTENSIONS):
-                            chart_folders[parent]["has_marker"] = True
+
+                    slash_idx = file_path.rfind("/")
+                    if slash_idx == -1:
+                        continue
+
+                    parent = file_path[:slash_idx]
+                    file_name = file_path[slash_idx + 1:].lower()
+
+                    chart_folders[parent]["size"] += file_size
+                    if file_name in CHART_MARKERS:
+                        chart_folders[parent]["has_marker"] = True
+                    elif any(file_name.endswith(ext) for ext in archive_extensions_set):
+                        chart_folders[parent]["has_marker"] = True
+
+                # Batch scan local files once
+                local_files = _scan_local_files(folder_path)
 
                 for parent, data in chart_folders.items():
                     if data["has_marker"]:
-                        # Check if chart exists locally (marker file or archive)
-                        local_parent = folder_path / parent
+                        # Check if chart exists locally using pre-scanned data
+                        parent_prefix = f"{parent}/"
                         has_local_marker = any(
-                            (local_parent / marker).exists() for marker in CHART_MARKERS
+                            local_files.get(f"{parent}/{marker}") is not None
+                            for marker in CHART_MARKERS
                         )
                         has_local_archive = any(
-                            f.suffix.lower() in CHART_ARCHIVE_EXTENSIONS
-                            for f in local_parent.iterdir() if f.is_file()
-                        ) if local_parent.exists() else False
+                            key.startswith(parent_prefix) and
+                            any(key.lower().endswith(ext) for ext in archive_extensions_set)
+                            for key in local_files
+                        ) if not has_local_marker else False
+
                         if has_local_marker or has_local_archive:
                             total_charts += 1
                             total_size += data["size"]
@@ -480,34 +555,43 @@ def count_purgeable_charts(folders: list, base_path: Path, user_settings=None) -
         for f in manifest_files:
             file_path = f.get("path", "")
             file_size = f.get("size", 0)
-            file_name = file_path.split("/")[-1].lower() if "/" in file_path else file_path.lower()
-            parts = file_path.split("/")
 
-            if len(parts) < 2:
+            first_slash = file_path.find("/")
+            if first_slash == -1:
                 continue
 
-            setlist = parts[0]
+            setlist = file_path[:first_slash]
             if setlist not in disabled_setlists:
                 continue
 
-            parent = "/".join(parts[:-1])
+            slash_idx = file_path.rfind("/")
+            parent = file_path[:slash_idx]
+            file_name = file_path[slash_idx + 1:].lower()
+
             chart_folders[parent]["size"] += file_size
             chart_folders[parent]["setlist"] = setlist
             if file_name in CHART_MARKERS:
                 chart_folders[parent]["has_marker"] = True
-            elif any(file_name.endswith(ext) for ext in CHART_ARCHIVE_EXTENSIONS):
+            elif any(file_name.endswith(ext) for ext in archive_extensions_set):
                 chart_folders[parent]["has_marker"] = True
+
+        # Batch scan local files once
+        local_files = _scan_local_files(folder_path)
 
         for parent, data in chart_folders.items():
             if data["has_marker"]:
-                local_parent = folder_path / parent
+                # Check if chart exists locally using pre-scanned data
+                parent_prefix = f"{parent}/"
                 has_local_marker = any(
-                    (local_parent / marker).exists() for marker in CHART_MARKERS
+                    local_files.get(f"{parent}/{marker}") is not None
+                    for marker in CHART_MARKERS
                 )
                 has_local_archive = any(
-                    f.suffix.lower() in CHART_ARCHIVE_EXTENSIONS
-                    for f in local_parent.iterdir() if f.is_file()
-                ) if local_parent.exists() else False
+                    key.startswith(parent_prefix) and
+                    any(key.lower().endswith(ext) for ext in archive_extensions_set)
+                    for key in local_files
+                ) if not has_local_marker else False
+
                 if has_local_marker or has_local_archive:
                     total_charts += 1
                     total_size += data["size"]

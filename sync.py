@@ -26,6 +26,7 @@ from src import (
     UserSettings,
     DrivesConfig,
     extract_subfolders_from_manifest,
+    compute_main_menu_cache,
 )
 from src.drive.client import DriveClientConfig
 
@@ -206,6 +207,7 @@ class SyncApp:
         self.load_manifest()
 
         selected_index = 0  # Track selected position for maintaining after actions
+        menu_cache = None  # Cache for expensive menu calculations
 
         while True:
             if not self.folders:
@@ -214,9 +216,16 @@ class SyncApp:
                 print("No folders available!")
                 print()
 
+            # Compute cache if needed (first run or after state-changing actions)
+            if menu_cache is None:
+                menu_cache = compute_main_menu_cache(
+                    self.folders, self.user_settings,
+                    get_download_path(), self.drives_config
+                )
+
             action, value, menu_pos = show_main_menu(
                 self.folders, self.user_settings, selected_index,
-                get_download_path(), self.drives_config
+                get_download_path(), self.drives_config, cache=menu_cache
             )
             selected_index = menu_pos  # Always preserve menu position
 
@@ -227,21 +236,26 @@ class SyncApp:
             elif action == "download":
                 if self.folders:
                     self.handle_download(list(range(len(self.folders))))
+                menu_cache = None  # Invalidate cache after download
 
             elif action == "purge":
                 self.handle_purge()
+                menu_cache = None  # Invalidate cache after purge
 
             elif action == "configure":
                 # Enter on a drive - go directly to configure that drive
                 self.handle_configure_drive(value)
+                menu_cache = None  # Invalidate cache after configure (setlists may change)
 
             elif action == "toggle":
                 # Space on a drive - toggle drive on/off
                 self.handle_toggle_drive(value)
+                menu_cache = None  # Invalidate cache after toggle
 
             elif action == "toggle_group":
-                # Enter/Space on a group - expand/collapse
+                # Enter/Space on a group - expand/collapse (NO cache invalidation!)
                 self.handle_toggle_group(value)
+                # Keep using the same cache - just showing/hiding items
 
 
 def main():

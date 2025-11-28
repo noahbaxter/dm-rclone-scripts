@@ -4,49 +4,107 @@ User interface components for DM Chart Sync.
 Handles menu display, user input, and terminal operations.
 """
 
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..utils import format_size, clear_screen
 from ..config import UserSettings, DrivesConfig, extract_subfolders_from_manifest
-from ..sync.operations import get_sync_status, count_purgeable_charts
+from ..sync.operations import get_sync_status, count_purgeable_charts, SyncStatus
 from .menu import Menu, MenuItem, MenuDivider, MenuGroupHeader, MenuResult
 
 
-def _build_folder_stats(folder: dict, user_settings: UserSettings = None, download_path: Path = None) -> str | None:
-    """Build stats string for a folder menu item."""
-    folder_id = folder.get("folder_id", "")
-    stats_parts = []
+@dataclass
+class MainMenuCache:
+    """Cache for expensive main menu calculations."""
+    # Global stats
+    subtitle: str = ""
+    purge_desc: str | None = None
 
-    # Get sync status for enabled setlists only
-    synced_charts = 0
-    synced_size = 0
-    total_charts = 0
-    if download_path:
+    # Per-folder stats: {folder_id: description_string}
+    folder_stats: dict = field(default_factory=dict)
+
+    # Group enabled counts: {group_name: enabled_count}
+    group_enabled_counts: dict = field(default_factory=dict)
+
+
+def compute_main_menu_cache(
+    folders: list,
+    user_settings: UserSettings,
+    download_path: Path,
+    drives_config: DrivesConfig
+) -> MainMenuCache:
+    """
+    Compute all expensive stats for the main menu.
+
+    Call this once, then reuse for group expand/collapse operations.
+    """
+    cache = MainMenuCache()
+
+    if not download_path or not folders:
+        return cache
+
+    # Calculate global sync status for subtitle
+    raw_status = get_sync_status(folders, download_path, user_settings=None)
+    enabled_status = get_sync_status(folders, download_path, user_settings)
+
+    pct = (enabled_status.synced_charts / enabled_status.total_charts * 100) if enabled_status.total_charts > 0 else 0
+    cache.subtitle = (
+        f"Downloaded: {raw_status.synced_charts:,} charts ({format_size(raw_status.synced_size)}) | "
+        f"Syncing: {enabled_status.total_charts:,} charts ({format_size(enabled_status.total_size)}) | "
+        f"{pct:.0f}% synced"
+    )
+
+    # Calculate purge count
+    purge_count, purge_size = count_purgeable_charts(folders, download_path, user_settings)
+    if purge_count > 0:
+        cache.purge_desc = f"{purge_count} charts, {format_size(purge_size)}"
+
+    # Calculate per-folder stats
+    for folder in folders:
+        folder_id = folder.get("folder_id", "")
+        stats_parts = []
+
+        # Get sync status for this folder
         status = get_sync_status([folder], download_path, user_settings)
-        synced_charts = status.synced_charts
-        synced_size = status.synced_size
-        total_charts = status.total_charts
 
-    setlists = extract_subfolders_from_manifest(folder)
+        # Show downloaded/total for enabled setlists
+        if status.total_charts:
+            stats_parts.append(f"{status.synced_charts}/{status.total_charts} charts")
 
-    # Show downloaded/total for enabled setlists
-    if total_charts:
-        stats_parts.append(f"{synced_charts}/{total_charts} charts")
+        setlists = extract_subfolders_from_manifest(folder)
+        if setlists and user_settings:
+            enabled_setlists = [
+                c for c in setlists
+                if user_settings.is_subfolder_enabled(folder_id, c)
+            ]
+            stats_parts.append(f"{len(enabled_setlists)}/{len(setlists)} setlists")
 
-    if setlists and user_settings:
-        enabled_setlists = [
-            c for c in setlists
-            if user_settings.is_subfolder_enabled(folder_id, c)
-        ]
-        stats_parts.append(f"{len(enabled_setlists)}/{len(setlists)} setlists")
+        # Show downloaded size
+        stats_parts.append(format_size(status.synced_size))
 
-    # Show downloaded size
-    stats_parts.append(format_size(synced_size))
+        cache.folder_stats[folder_id] = ", ".join(stats_parts) if stats_parts else None
 
-    return ", ".join(stats_parts) if stats_parts else None
+    # Calculate group enabled counts
+    if drives_config:
+        for group_name in drives_config.get_groups():
+            group_drives = drives_config.get_drives_in_group(group_name)
+            enabled_count = sum(
+                1 for d in group_drives
+                if (user_settings.is_drive_enabled(d.folder_id) if user_settings else True)
+            )
+            cache.group_enabled_counts[group_name] = enabled_count
+
+    return cache
 
 
-def show_main_menu(folders: list, user_settings: UserSettings = None, selected_index: int = 0, download_path: Path = None, drives_config: DrivesConfig = None) -> tuple[str, str | int | None, int]:
+def show_main_menu(
+    folders: list,
+    user_settings: UserSettings = None,
+    selected_index: int = 0,
+    download_path: Path = None,
+    drives_config: DrivesConfig = None,
+    cache: MainMenuCache = None
+) -> tuple[str, str | int | None, int]:
     """
     Show main menu and get user selection.
 
@@ -56,6 +114,7 @@ def show_main_menu(folders: list, user_settings: UserSettings = None, selected_i
         selected_index: Index to keep selected (for maintaining position after toggle)
         download_path: Path to download folder for sync status calculation
         drives_config: Drive configuration with group information
+        cache: Pre-computed stats cache (if None, will compute fresh)
 
     Returns tuple of (action, value, menu_position):
         - ("quit", None, pos) - user wants to quit
@@ -65,22 +124,11 @@ def show_main_menu(folders: list, user_settings: UserSettings = None, selected_i
         - ("toggle", folder_id, pos) - toggle drive on/off (space on drive)
         - ("toggle_group", group_name, pos) - expand/collapse group
     """
-    # Calculate sync status for subtitle
-    subtitle = ""
-    if download_path and folders:
-        # Get raw downloaded count (ignore what's enabled)
-        raw_status = get_sync_status(folders, download_path, user_settings=None)
-        # Get enabled status (filtered by user settings)
-        enabled_status = get_sync_status(folders, download_path, user_settings)
+    # Compute cache if not provided
+    if cache is None:
+        cache = compute_main_menu_cache(folders, user_settings, download_path, drives_config)
 
-        pct = (enabled_status.synced_charts / enabled_status.total_charts * 100) if enabled_status.total_charts > 0 else 0
-        subtitle = (
-            f"Downloaded: {raw_status.synced_charts:,} charts ({format_size(raw_status.synced_size)}) | "
-            f"Syncing: {enabled_status.total_charts:,} charts ({format_size(enabled_status.total_size)}) | "
-            f"{pct:.0f}% synced"
-        )
-
-    menu = Menu(title="Available chart packs:", subtitle=subtitle, space_hint="Toggle")
+    menu = Menu(title="Available chart packs:", subtitle=cache.subtitle, space_hint="Toggle")
 
     # Build folder lookup by folder_id
     folder_lookup = {f.get("folder_id", ""): f for f in folders}
@@ -102,7 +150,7 @@ def show_main_menu(folders: list, user_settings: UserSettings = None, selected_i
         nonlocal hotkey_num
         folder_id = folder.get("folder_id", "")
         drive_enabled = user_settings.is_drive_enabled(folder_id) if user_settings else True
-        stats = _build_folder_stats(folder, user_settings, download_path)
+        stats = cache.folder_stats.get(folder_id)
 
         # Hotkeys only for first 9 ungrouped folders
         hotkey = None
@@ -134,10 +182,7 @@ def show_main_menu(folders: list, user_settings: UserSettings = None, selected_i
         # Count drives and enabled drives in this group
         group_drives = drives_config.get_drives_in_group(group_name) if drives_config else []
         drive_count = len(group_drives)
-        enabled_count = sum(
-            1 for d in group_drives
-            if (user_settings.is_drive_enabled(d.folder_id) if user_settings else True)
-        )
+        enabled_count = cache.group_enabled_counts.get(group_name, 0)
 
         menu.add_item(MenuGroupHeader(
             label=group_name,
@@ -167,13 +212,8 @@ def show_main_menu(folders: list, user_settings: UserSettings = None, selected_i
     # Action items
     menu.add_item(MenuItem("Download", hotkey="D", value=("download", None)))
 
-    # Show purge count if we have a download path
-    purge_desc = None
-    if download_path and folders:
-        purge_count, purge_size = count_purgeable_charts(folders, download_path, user_settings)
-        if purge_count > 0:
-            purge_desc = f"{purge_count} charts, {format_size(purge_size)}"
-    menu.add_item(MenuItem("Purge", hotkey="X", value=("purge", None), description=purge_desc))
+    # Show purge count from cache
+    menu.add_item(MenuItem("Purge", hotkey="X", value=("purge", None), description=cache.purge_desc))
     menu.add_item(MenuDivider())
     menu.add_item(MenuItem("Quit", hotkey="Q", value=("quit", None)))
 
