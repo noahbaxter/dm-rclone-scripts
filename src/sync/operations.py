@@ -9,7 +9,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..constants import CHART_MARKERS
+from ..constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS
 from ..file_ops import find_unexpected_files_with_sizes
 from ..utils import format_size, format_duration, print_progress
 from ..drive import DriveClient, FolderScanner
@@ -71,8 +71,8 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
             disabled_charters = user_settings.get_disabled_subfolders(folder_id)
 
         # Group files by parent folder to identify charts
-        # chart_folders: {parent_path: {files: [...], has_marker: bool, total_size: int}}
-        chart_folders = defaultdict(lambda: {"files": [], "has_marker": False, "total_size": 0})
+        # chart_folders: {parent_path: {files: [...], is_chart: bool, total_size: int}}
+        chart_folders = defaultdict(lambda: {"files": [], "is_chart": False, "total_size": 0})
 
         for f in manifest_files:
             file_path = f.get("path", "")
@@ -94,12 +94,16 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
             chart_folders[parent]["files"].append((file_path, file_size))
             chart_folders[parent]["total_size"] += file_size
 
+            # Check for chart markers (song.ini, notes.mid, etc.)
             if file_name in CHART_MARKERS:
-                chart_folders[parent]["has_marker"] = True
+                chart_folders[parent]["is_chart"] = True
+            # Check for archive files (.zip, .7z, .rar)
+            elif any(file_name.endswith(ext) for ext in CHART_ARCHIVE_EXTENSIONS):
+                chart_folders[parent]["is_chart"] = True
 
-        # Count charts (folders with markers)
+        # Count charts (folders with markers or archives)
         for parent, data in chart_folders.items():
-            if not data["has_marker"]:
+            if not data["is_chart"]:
                 continue
 
             status.total_charts += 1
@@ -393,15 +397,21 @@ def count_purgeable_charts(folders: list, base_path: Path, user_settings=None) -
                         chart_folders[parent]["size"] += file_size
                         if file_name in CHART_MARKERS:
                             chart_folders[parent]["has_marker"] = True
+                        elif any(file_name.endswith(ext) for ext in CHART_ARCHIVE_EXTENSIONS):
+                            chart_folders[parent]["has_marker"] = True
 
                 for parent, data in chart_folders.items():
                     if data["has_marker"]:
-                        # Check if chart exists locally (at least the marker file)
+                        # Check if chart exists locally (marker file or archive)
                         local_parent = folder_path / parent
                         has_local_marker = any(
                             (local_parent / marker).exists() for marker in CHART_MARKERS
                         )
-                        if has_local_marker:
+                        has_local_archive = any(
+                            f.suffix.lower() in CHART_ARCHIVE_EXTENSIONS
+                            for f in local_parent.iterdir() if f.is_file()
+                        ) if local_parent.exists() else False
+                        if has_local_marker or has_local_archive:
                             total_charts += 1
                             total_size += data["size"]
             continue
@@ -430,6 +440,8 @@ def count_purgeable_charts(folders: list, base_path: Path, user_settings=None) -
             chart_folders[parent]["charter"] = charter
             if file_name in CHART_MARKERS:
                 chart_folders[parent]["has_marker"] = True
+            elif any(file_name.endswith(ext) for ext in CHART_ARCHIVE_EXTENSIONS):
+                chart_folders[parent]["has_marker"] = True
 
         for parent, data in chart_folders.items():
             if data["has_marker"]:
@@ -437,7 +449,11 @@ def count_purgeable_charts(folders: list, base_path: Path, user_settings=None) -
                 has_local_marker = any(
                     (local_parent / marker).exists() for marker in CHART_MARKERS
                 )
-                if has_local_marker:
+                has_local_archive = any(
+                    f.suffix.lower() in CHART_ARCHIVE_EXTENSIONS
+                    for f in local_parent.iterdir() if f.is_file()
+                ) if local_parent.exists() else False
+                if has_local_marker or has_local_archive:
                     total_charts += 1
                     total_size += data["size"]
 

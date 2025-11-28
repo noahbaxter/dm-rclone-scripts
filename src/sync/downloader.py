@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 import requests
 
-from ..constants import CHART_MARKERS
+from ..constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS
 from ..file_ops import file_exists_with_size
 from .progress import ProgressTracker
 
@@ -108,7 +108,14 @@ class FolderProgress(ProgressTracker):
             folder_files[folder].append(task.local_path.name.lower())
 
         for folder, filenames in folder_files.items():
-            is_chart = bool(set(filenames) & CHART_MARKERS)
+            # Check for chart markers (song.ini, notes.mid, etc.)
+            has_markers = bool(set(filenames) & CHART_MARKERS)
+            # Check for archive files (.zip, .7z, .rar)
+            has_archives = any(
+                f.endswith(tuple(CHART_ARCHIVE_EXTENSIONS)) for f in filenames
+            )
+            is_chart = has_markers or has_archives
+
             self.folder_progress[folder] = {
                 "expected": len(filenames),
                 "completed": 0,
