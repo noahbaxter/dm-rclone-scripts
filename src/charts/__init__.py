@@ -16,6 +16,7 @@ from .sng_chart import SngChart
 from .detector import detect_chart_type, create_chart, create_charts_from_manifest
 from .syncer import ChartSyncer, ChartProgress
 from .counter import count_charts_in_files, ChartCounts, SubfolderStats, DriveStats
+from .archive_inspect import get_archive_size_without_videos
 
 __all__ = [
     "Chart",
@@ -34,4 +35,5 @@ __all__ = [
     "ChartCounts",
     "SubfolderStats",
     "DriveStats",
+    "get_archive_size_without_videos",
 ]
