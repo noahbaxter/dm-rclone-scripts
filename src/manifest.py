@@ -183,7 +183,8 @@ class Manifest:
 
     def get_complete_folder_ids(self) -> set:
         """Get set of folder IDs that have been fully scanned."""
-        return {f.folder_id for f in self.folders if f.complete}
+        # Treat drives with 0 files as incomplete (likely permission issue)
+        return {f.folder_id for f in self.folders if f.complete and f.file_count > 0}
 
     def get_incomplete_folder_ids(self) -> set:
         """Get set of folder IDs that were partially scanned."""

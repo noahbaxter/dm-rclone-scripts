@@ -6,6 +6,12 @@ on:
     - cron: '0 6 * * *'
   # Allow manual trigger
   workflow_dispatch:
+    inputs:
+      force_rescan:
+        description: 'Force complete rescan (ignore existing manifest)'
+        required: false
+        default: 'false'
+        type: boolean
 
 permissions:
   contents: write
@@ -26,6 +32,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Set up OAuth credentials
+        run: |
+          echo '${{ secrets.GOOGLE_CREDENTIALS }}' > credentials.json
+          echo '${{ secrets.GOOGLE_TOKEN }}' > token.json
+
       - name: Download existing manifest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -36,12 +47,13 @@ jobs:
       - name: Run manifest generator
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
-          GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_OAUTH_CLIENT_ID }}
-          GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
-          GOOGLE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_OAUTH_REFRESH_TOKEN }}
         run: |
+          # Force rescan if requested
+          if [ "${{ inputs.force_rescan }}" = "true" ]; then
+            echo "Force rescan requested"
+            python manifest_gen.py --force
           # Check if manifest exists AND has folder data (not just a token stub)
-          if [ -f manifest.json ] && python -c "import json; m=json.load(open('manifest.json')); exit(0 if m.get('folders') else 1)"; then
+          elif [ -f manifest.json ] && python -c "import json; m=json.load(open('manifest.json')); exit(0 if m.get('folders') else 1)"; then
             # Incremental update using existing manifest's changes_token
             python manifest_gen.py
           else

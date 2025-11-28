@@ -4,8 +4,6 @@ OAuth authentication manager for DM Chart Sync.
 Handles Google OAuth 2.0 flow for the Changes API.
 """
 
-import json
-import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -18,53 +16,6 @@ try:
     OAUTH_AVAILABLE = True
 except ImportError:
     OAUTH_AVAILABLE = False
-
-
-def _get_oauth_credentials_from_env() -> Optional[dict]:
-    """
-    Build OAuth credentials dict from environment variables.
-
-    Returns:
-        Credentials dict in Google's format, or None if not configured
-    """
-    client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID")
-    client_secret = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET")
-
-    if not client_id or not client_secret:
-        return None
-
-    return {
-        "installed": {
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-            "redirect_uris": ["http://localhost"]
-        }
-    }
-
-
-def _get_token_from_env() -> Optional[dict]:
-    """
-    Build token dict from environment variables (for CI/headless use).
-
-    Returns:
-        Token dict in Google's format, or None if not configured
-    """
-    client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID")
-    client_secret = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET")
-    refresh_token = os.environ.get("GOOGLE_OAUTH_REFRESH_TOKEN")
-
-    if not client_id or not client_secret or not refresh_token:
-        return None
-
-    return {
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "refresh_token": refresh_token,
-        "token_uri": "https://oauth2.googleapis.com/token",
-    }
 
 
 class OAuthManager:
@@ -85,20 +36,14 @@ class OAuthManager:
         """
         Initialize OAuth manager.
 
-        Credentials can be provided via:
-        1. Environment variables (GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET)
-        2. credentials.json file
-
         Args:
-            credentials_path: Path to OAuth credentials JSON (fallback if env vars not set)
+            credentials_path: Path to OAuth credentials JSON
             token_path: Path to save/load token
         """
         base_path = self._get_base_path()
         self.credentials_path = credentials_path or base_path / "credentials.json"
         self.token_path = token_path or base_path / "token.json"
         self._credentials: Optional[Credentials] = None
-        self._env_credentials = _get_oauth_credentials_from_env()
-        self._env_token = _get_token_from_env()
 
     @staticmethod
     def _get_base_path() -> Path:
@@ -115,13 +60,8 @@ class OAuthManager:
 
     @property
     def is_configured(self) -> bool:
-        """Check if OAuth credentials are available (env vars or file)."""
-        # Configured if we have env token, env credentials, or credentials file
-        return (
-            self._env_token is not None or
-            self._env_credentials is not None or
-            self.credentials_path.exists()
-        )
+        """Check if OAuth credentials are available."""
+        return self.credentials_path.exists()
 
     @property
     def has_token(self) -> bool:
@@ -131,11 +71,6 @@ class OAuthManager:
     def get_credentials(self) -> Optional[Credentials]:
         """
         Get or refresh OAuth credentials.
-
-        Priority:
-        1. Environment variables with refresh token (CI/headless)
-        2. Existing token.json file
-        3. Interactive OAuth flow (local dev)
 
         Returns:
             Credentials object or None if not available
@@ -148,22 +83,8 @@ class OAuthManager:
 
         creds = None
 
-        # First, try env vars with refresh token (for CI/headless)
-        if self._env_token:
-            try:
-                creds = Credentials.from_authorized_user_info(
-                    self._env_token,
-                    self.SCOPES
-                )
-                # Refresh immediately since we only have refresh_token, not access_token
-                if creds and creds.refresh_token:
-                    creds.refresh(Request())
-            except Exception as e:
-                print(f"Warning: Could not use env token: {e}")
-                creds = None
-
-        # Try to load existing token file
-        if not creds and self.token_path.exists():
+        # Try to load existing token
+        if self.token_path.exists():
             try:
                 creds = Credentials.from_authorized_user_file(
                     str(self.token_path),
@@ -179,27 +100,20 @@ class OAuthManager:
             except Exception:
                 creds = None
 
-        # Get new credentials via interactive flow if needed (local dev only)
+        # Get new credentials if needed
         if not creds or not creds.valid:
             try:
-                # Prefer env vars, fall back to file
-                if self._env_credentials:
-                    flow = InstalledAppFlow.from_client_config(
-                        self._env_credentials,
-                        self.SCOPES
-                    )
-                else:
-                    flow = InstalledAppFlow.from_client_secrets_file(
-                        str(self.credentials_path),
-                        self.SCOPES
-                    )
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    str(self.credentials_path),
+                    self.SCOPES
+                )
                 creds = flow.run_local_server(port=0)
             except Exception as e:
                 print(f"OAuth error: {e}")
                 return None
 
-        # Save token for next time (only if not using env token)
-        if creds and not self._env_token:
+        # Save token for next time
+        if creds:
             self._save_token(creds)
             self._credentials = creds
 

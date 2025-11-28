@@ -108,6 +108,7 @@ class DriveClient:
                 supportsAllDrives="true",
                 includeItemsFromAllDrives="true",
             )
+
             if page_token:
                 params["pageToken"] = page_token
 

@@ -284,11 +284,11 @@ def generate_incremental():
         print()
 
     complete_ids = manifest.get_complete_folder_ids()
-    incomplete_ids = manifest.get_incomplete_folder_ids()
 
     # Check if manifest is incomplete - need full scan first
     missing_drives = expected_ids - manifest.get_folder_ids()
-    incomplete_drives = expected_ids & incomplete_ids  # Drives that exist but are incomplete
+    # Drives not in complete_ids (includes 0-file drives)
+    incomplete_drives = expected_ids - complete_ids
 
     if not manifest.folders or not manifest.changes_token or missing_drives or incomplete_drives:
         if not manifest.folders:
