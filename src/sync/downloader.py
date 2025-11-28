@@ -343,6 +343,7 @@ class DownloadResult:
     file_path: Path
     message: str
     bytes_downloaded: int = 0
+    retryable: bool = False  # True if failure might succeed on retry (rate limit)
 
 
 @dataclass
@@ -369,7 +370,7 @@ class FileDownloader:
 
     def __init__(
         self,
-        max_workers: int = 48,
+        max_workers: int = 24,
         max_retries: int = 3,
         timeout: Tuple[int, int] = (10, 60),
         chunk_size: int = 32768,
@@ -413,11 +414,16 @@ class FileDownloader:
                     async with session.get(url, allow_redirects=True) as response:
                         response.raise_for_status()
 
-                        # Check if we got HTML instead of the file (auth required)
+                        # Check if we got HTML instead of the file (rate limit or auth required)
                         content_type = response.headers.get("content-type", "")
                         if "text/html" in content_type:
+                            # Could be rate limiting - retry with backoff
+                            if attempt < self.max_retries - 1:
+                                await asyncio.sleep(1.0 * (attempt + 1))  # Longer backoff for rate limits
+                                continue
+
+                            # Last attempt - try authenticated download if available
                             if self.auth_token:
-                                # Try authenticated download
                                 api_url = f"{self.API_DOWNLOAD_URL.format(file_id=task.file_id)}&acknowledgeAbuse=true"
                                 headers = {"Authorization": f"Bearer {self.auth_token}"}
                                 async with session.get(api_url, headers=headers) as auth_response:
@@ -427,7 +433,8 @@ class FileDownloader:
                                 return DownloadResult(
                                     success=False,
                                     file_path=task.local_path,
-                                    message=f"SKIP (auth required): {task.local_path.name}",
+                                    message=f"SKIP (rate limited): {task.local_path.name}",
+                                    retryable=True,  # Can retry later
                                 )
 
                         return await self._write_response(response, task)
@@ -440,6 +447,7 @@ class FileDownloader:
                         success=False,
                         file_path=task.local_path,
                         message=f"ERR (timeout): {task.local_path.name}",
+                        retryable=True,
                     )
 
                 except aiohttp.ClientResponseError as e:
@@ -556,15 +564,16 @@ class FileDownloader:
         tasks: List[DownloadTask],
         progress: Optional[FolderProgress],
         progress_callback: Optional[Callable[[DownloadResult], None]],
-    ) -> Tuple[int, int, bool]:
+    ) -> Tuple[int, int, List[DownloadTask], bool]:
         """
         Internal async implementation of download_many.
 
         Returns:
-            Tuple of (downloaded_count, error_count, cancelled)
+            Tuple of (downloaded_count, error_count, retryable_tasks, cancelled)
         """
         downloaded = 0
         errors = 0
+        retryable_tasks: List[DownloadTask] = []
         cancelled = False
         loop = asyncio.get_event_loop()
 
@@ -644,6 +653,9 @@ class FileDownloader:
                                     progress.print_folder_complete(folder_name, is_chart)
                         else:
                             errors += 1
+                            # Track retryable failures for later retry
+                            if result.retryable:
+                                retryable_tasks.append(task)
                             if progress:
                                 progress.file_completed(result.file_path)
                                 progress.write(f"  {result.message}")
@@ -656,14 +668,14 @@ class FileDownloader:
                 for t in pending:
                     t.cancel()
 
-        return downloaded, errors, cancelled
+        return downloaded, errors, retryable_tasks, cancelled
 
     def download_many(
         self,
         tasks: List[DownloadTask],
         progress_callback: Optional[Callable[[DownloadResult], None]] = None,
         show_progress: bool = True,
-    ) -> Tuple[int, int, int, bool]:
+    ) -> Tuple[int, int, int, int, bool]:
         """
         Download multiple files concurrently using asyncio.
 
@@ -673,10 +685,10 @@ class FileDownloader:
             show_progress: Whether to show progress
 
         Returns:
-            Tuple of (downloaded_count, skipped_count, error_count, cancelled)
+            Tuple of (downloaded_count, skipped_count, error_count, rate_limited_count, cancelled)
         """
         if not tasks:
-            return 0, 0, 0, False
+            return 0, 0, 0, 0, False
 
         progress = None
         if show_progress:
@@ -708,13 +720,16 @@ class FileDownloader:
 
         try:
             # Run the async download
-            downloaded, errors, cancelled = asyncio.run(
+            downloaded, errors, retryable, cancelled = asyncio.run(
                 self._download_many_async(tasks, progress, progress_callback)
             )
+            rate_limited = len(retryable)
+            permanent_errors = errors - rate_limited
         except KeyboardInterrupt:
             cancelled = True
             downloaded = 0
-            errors = 0
+            permanent_errors = 0
+            rate_limited = 0
         finally:
             # Stop ESC monitor
             esc_monitor.stop()
@@ -730,7 +745,7 @@ class FileDownloader:
                 if cancelled:
                     print(f"  Cancelled. Downloaded {downloaded} files ({progress.completed_charts} complete charts).")
 
-        return downloaded, 0, errors, cancelled
+        return downloaded, 0, permanent_errors, rate_limited, cancelled
 
     @staticmethod
     def filter_existing(

@@ -277,25 +277,25 @@ class FolderSync:
 
         if not tasks and not skipped:
             print(f"  No files found or error accessing folder")
-            return 0, 0, 1, False
+            return 0, 0, 1, 0, False
 
         if not tasks:
             print(f"  All {skipped} files already downloaded")
-            return 0, skipped, 0, False
+            return 0, skipped, 0, 0, False
 
         total_size = sum(t.size for t in tasks)
         print(f"  Found {len(tasks)} files to download ({format_size(total_size)}), {skipped} already exist")
 
         # Download
         download_start = time.time()
-        downloaded, _, errors, cancelled = self.downloader.download_many(tasks)
+        downloaded, _, errors, rate_limited, cancelled = self.downloader.download_many(tasks)
         download_time = time.time() - download_start
 
         if not cancelled:
             print(f"  Download completed in {format_duration(download_time)}")
             print(f"  Total time: {format_duration(scan_time + download_time)}")
 
-        return downloaded, skipped, errors, cancelled
+        return downloaded, skipped, errors, rate_limited, cancelled
 
     def download_folders(
         self,
@@ -306,6 +306,9 @@ class FolderSync:
     ):
         """
         Download selected folders.
+
+        Automatically retries rate-limited files by re-running the sync
+        (which skips already-downloaded files) until everything succeeds.
 
         Args:
             folders: List of folder dicts from manifest
@@ -327,29 +330,62 @@ class FolderSync:
         total_skipped = 0
         total_errors = 0
         was_cancelled = False
+        retry_round = 0
+        max_retries = 10  # Safety limit
 
-        for idx in indices:
-            folder = folders[idx]
-            print(f"\n[{folder['name']}]")
-            print("-" * 40)
+        while retry_round <= max_retries:
+            round_downloaded = 0
+            round_rate_limited = 0
 
-            # Get disabled prefixes for this specific folder
-            folder_id = folder.get("folder_id", "")
-            disabled_prefixes = disabled_prefixes_map.get(folder_id, [])
+            for idx in indices:
+                folder = folders[idx]
+                if retry_round == 0:
+                    print(f"\n[{folder['name']}]")
+                else:
+                    print(f"\n[{folder['name']}] (retry {retry_round})")
+                print("-" * 40)
 
-            downloaded, skipped, errors, cancelled = self.sync_folder(
-                folder, download_path, disabled_prefixes
-            )
+                # Get disabled prefixes for this specific folder
+                folder_id = folder.get("folder_id", "")
+                disabled_prefixes = disabled_prefixes_map.get(folder_id, [])
 
-            total_downloaded += downloaded
-            total_skipped += skipped
-            total_errors += errors
+                downloaded, skipped, errors, rate_limited, cancelled = self.sync_folder(
+                    folder, download_path, disabled_prefixes
+                )
 
-            if cancelled:
-                was_cancelled = True
+                round_downloaded += downloaded
+                round_rate_limited += rate_limited
+                total_downloaded += downloaded
+                total_skipped += skipped
+                total_errors += errors
+
+                if cancelled:
+                    was_cancelled = True
+                    break
+
+                if rate_limited > 0:
+                    print(f"  Downloaded: {downloaded}, Skipped: {skipped}, Errors: {errors}, Rate-limited: {rate_limited}")
+                else:
+                    print(f"  Downloaded: {downloaded}, Skipped: {skipped}, Errors: {errors}")
+
+            if was_cancelled:
                 break
 
-            print(f"  Downloaded: {downloaded}, Skipped: {skipped}, Errors: {errors}")
+            # If we had rate-limited files, wait and retry
+            if round_rate_limited > 0:
+                retry_round += 1
+                wait_time = min(60, 15 + retry_round * 10)  # 25s, 35s, 45s, ... up to 60s
+                print(f"\n  {round_rate_limited} files were rate-limited. Waiting {wait_time}s before retry...")
+                print("  (Press Ctrl+C to cancel)")
+                try:
+                    time.sleep(wait_time)
+                except KeyboardInterrupt:
+                    was_cancelled = True
+                    print("\n  Cancelled.")
+                    break
+            else:
+                # No rate limiting, we're done
+                break
 
         if was_cancelled:
             return
@@ -360,6 +396,8 @@ class FolderSync:
         print(f"  Total downloaded: {total_downloaded}")
         print(f"  Total skipped (already exists): {total_skipped}")
         print(f"  Total errors: {total_errors}")
+        if retry_round > 0:
+            print(f"  Retry rounds needed: {retry_round}")
         print("=" * 50)
 
         # Auto-dismiss after 2 seconds (any key skips)
