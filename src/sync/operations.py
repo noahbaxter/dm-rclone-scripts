@@ -356,6 +356,94 @@ def delete_files(files: list, base_path: Path) -> int:
     return deleted
 
 
+def count_purgeable_charts(folders: list, base_path: Path, user_settings=None) -> tuple[int, int]:
+    """
+    Count charts that would be purged based on manifest chart definitions.
+
+    Uses the same logic as get_sync_status - a chart is defined by the manifest's
+    folder structure, not by scanning local disk for markers.
+
+    Returns:
+        Tuple of (chart_count, total_size)
+    """
+    total_charts = 0
+    total_size = 0
+
+    for folder in folders:
+        folder_id = folder.get("folder_id", "")
+        folder_name = folder.get("name", "")
+        folder_path = base_path / folder_name
+
+        if not folder_path.exists():
+            continue
+
+        drive_enabled = user_settings.is_drive_enabled(folder_id) if user_settings else True
+        manifest_files = folder.get("files", [])
+
+        if not drive_enabled:
+            # Count synced charts in disabled drive using manifest
+            if manifest_files:
+                chart_folders = defaultdict(lambda: {"has_marker": False, "size": 0})
+                for f in manifest_files:
+                    file_path = f.get("path", "")
+                    file_size = f.get("size", 0)
+                    file_name = file_path.split("/")[-1].lower() if "/" in file_path else file_path.lower()
+                    if "/" in file_path:
+                        parent = "/".join(file_path.split("/")[:-1])
+                        chart_folders[parent]["size"] += file_size
+                        if file_name in CHART_MARKERS:
+                            chart_folders[parent]["has_marker"] = True
+
+                for parent, data in chart_folders.items():
+                    if data["has_marker"]:
+                        # Check if chart exists locally (at least the marker file)
+                        local_parent = folder_path / parent
+                        has_local_marker = any(
+                            (local_parent / marker).exists() for marker in CHART_MARKERS
+                        )
+                        if has_local_marker:
+                            total_charts += 1
+                            total_size += data["size"]
+            continue
+
+        # Drive enabled - count charts in disabled charters
+        disabled_charters = user_settings.get_disabled_subfolders(folder_id) if user_settings else set()
+        if not disabled_charters or not manifest_files:
+            continue
+
+        chart_folders = defaultdict(lambda: {"has_marker": False, "size": 0, "charter": ""})
+        for f in manifest_files:
+            file_path = f.get("path", "")
+            file_size = f.get("size", 0)
+            file_name = file_path.split("/")[-1].lower() if "/" in file_path else file_path.lower()
+            parts = file_path.split("/")
+
+            if len(parts) < 2:
+                continue
+
+            charter = parts[0]
+            if charter not in disabled_charters:
+                continue
+
+            parent = "/".join(parts[:-1])
+            chart_folders[parent]["size"] += file_size
+            chart_folders[parent]["charter"] = charter
+            if file_name in CHART_MARKERS:
+                chart_folders[parent]["has_marker"] = True
+
+        for parent, data in chart_folders.items():
+            if data["has_marker"]:
+                local_parent = folder_path / parent
+                has_local_marker = any(
+                    (local_parent / marker).exists() for marker in CHART_MARKERS
+                )
+                if has_local_marker:
+                    total_charts += 1
+                    total_size += data["size"]
+
+    return total_charts, total_size
+
+
 def purge_all_folders(folders: list, base_path: Path, user_settings=None):
     """
     Purge files that shouldn't be synced.

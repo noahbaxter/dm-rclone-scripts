@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ..utils import format_size, clear_screen
 from ..config import UserSettings, extract_subfolders_from_manifest
-from ..sync.operations import get_sync_status
+from ..sync.operations import get_sync_status, count_purgeable_charts
 from .menu import Menu, MenuItem, MenuDivider, MenuResult
 
 
@@ -104,7 +104,14 @@ def show_main_menu(folders: list, user_settings: UserSettings = None, selected_i
 
     # Action items
     menu.add_item(MenuItem("Download", hotkey="D", value=("download", None)))
-    menu.add_item(MenuItem("Purge", hotkey="X", value=("purge", None)))
+
+    # Show purge count if we have a download path
+    purge_desc = None
+    if download_path and folders:
+        purge_count, purge_size = count_purgeable_charts(folders, download_path, user_settings)
+        if purge_count > 0:
+            purge_desc = f"{purge_count} charts, {format_size(purge_size)}"
+    menu.add_item(MenuItem("Purge", hotkey="X", value=("purge", None), description=purge_desc))
     menu.add_item(MenuDivider())
     menu.add_item(MenuItem("Quit", hotkey="Q", value=("quit", None)))
 

@@ -6,7 +6,7 @@ Handles file downloading, sync logic, and progress tracking.
 
 from .progress import ProgressTracker
 from .downloader import FileDownloader, DownloadTask, DownloadResult, FolderProgress
-from .operations import FolderSync, get_sync_status, SyncStatus, purge_all_folders
+from .operations import FolderSync, get_sync_status, SyncStatus, purge_all_folders, count_purgeable_charts
 
 __all__ = [
     "ProgressTracker",
@@ -18,4 +18,5 @@ __all__ = [
     "get_sync_status",
     "SyncStatus",
     "purge_all_folders",
+    "count_purgeable_charts",
 ]
