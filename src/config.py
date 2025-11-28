@@ -129,6 +129,12 @@ class UserSettings:
     - Subfolder toggle states (which subfolders are enabled/disabled per drive)
     """
 
+    # Drives enabled by default when no settings file exists
+    DEFAULT_ENABLED_DRIVES = {
+        "1OTcP60EwXnT73FYy-yjbB2C7yU6mVMTf",  # BirdmanExe Drive
+        "1bqsJzbXRkmRda3qJFX3W36UD3Sg_eIVj",  # Drummer's Monthly Drive
+    }
+
     def __init__(self, path: Path):
         self.path = path
         # Drive-level toggles: { drive_folder_id: enabled_bool }
@@ -139,6 +145,8 @@ class UserSettings:
         self.group_expanded: dict[str, bool] = {}
         # Whether to delete video files from extracted archive charts
         self.delete_videos: bool = True
+        # Track if this is a fresh settings file (no file existed)
+        self._is_new: bool = False
 
     @classmethod
     def load(cls, path: Path) -> "UserSettings":
@@ -155,7 +163,9 @@ class UserSettings:
                 settings.group_expanded = data.get("group_expanded", {})
                 settings.delete_videos = data.get("delete_videos", True)
             except (json.JSONDecodeError, IOError):
-                pass
+                settings._is_new = True
+        else:
+            settings._is_new = True
 
         return settings
 
@@ -171,8 +181,18 @@ class UserSettings:
             json.dump(data, f, indent=2)
 
     def is_drive_enabled(self, drive_id: str) -> bool:
-        """Check if a drive is enabled at the top level (defaults to True)."""
-        return self.drive_toggles.get(drive_id, True)
+        """Check if a drive is enabled at the top level.
+
+        For new users (no settings file), only DEFAULT_ENABLED_DRIVES are enabled.
+        For existing users, any drive not explicitly set defaults to enabled.
+        """
+        if drive_id in self.drive_toggles:
+            return self.drive_toggles[drive_id]
+        # New users: only default drives enabled
+        if self._is_new:
+            return drive_id in self.DEFAULT_ENABLED_DRIVES
+        # Existing users: default to enabled for backwards compatibility
+        return True
 
     def set_drive_enabled(self, drive_id: str, enabled: bool):
         """Set whether a drive is enabled at the top level."""
