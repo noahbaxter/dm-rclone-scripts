@@ -26,6 +26,29 @@ ZIP_EXTENSIONS = {".zip", ".rar", ".7z"}
 SNG_EXTENSION = ".sng"
 
 
+def is_sng_file(filename: str) -> bool:
+    """Check if filename is a .sng container."""
+    return filename.lower().endswith(SNG_EXTENSION)
+
+
+def is_zip_file(filename: str) -> bool:
+    """Check if filename is a zip/rar/7z archive."""
+    lower = filename.lower()
+    return any(lower.endswith(ext) for ext in ZIP_EXTENSIONS)
+
+
+def is_chart_marker_file(filename: str) -> bool:
+    """Check if filename is a chart marker (song.ini or notes file)."""
+    lower = filename.lower()
+    return lower in CHART_INI_FILES or lower in CHART_NOTE_FILES
+
+
+def has_folder_chart_markers(filenames: set[str]) -> bool:
+    """Check if a set of filenames contains folder chart markers (song.ini or notes)."""
+    lower_names = {f.lower() for f in filenames}
+    return bool(lower_names & CHART_INI_FILES) or bool(lower_names & CHART_NOTE_FILES)
+
+
 def detect_chart_type(files: List[dict]) -> ChartType:
     """
     Detect chart type from a list of files.
@@ -41,27 +64,19 @@ def detect_chart_type(files: List[dict]) -> ChartType:
 
     # Check for single file cases first
     if len(files) == 1:
-        filename = files[0].get("path", "").lower()
-
-        # .sng file
-        if filename.endswith(SNG_EXTENSION):
+        filename = files[0].get("path", "")
+        if is_sng_file(filename):
             return ChartType.SNG
-
-        # Zip archive
-        for ext in ZIP_EXTENSIONS:
-            if filename.endswith(ext):
-                return ChartType.ZIP
+        if is_zip_file(filename):
+            return ChartType.ZIP
 
     # Check if any file indicates this is an archive
     for f in files:
-        filename = f.get("path", "").lower()
-
-        if filename.endswith(SNG_EXTENSION):
+        filename = f.get("path", "")
+        if is_sng_file(filename):
             return ChartType.SNG
-
-        for ext in ZIP_EXTENSIONS:
-            if filename.endswith(ext):
-                return ChartType.ZIP
+        if is_zip_file(filename):
+            return ChartType.ZIP
 
     # Default: folder chart with loose files
     return ChartType.FOLDER
@@ -83,20 +98,15 @@ def detect_chart_type_from_folder(folder_path: Path) -> ChartType:
     files = list(folder_path.iterdir())
 
     # Single .sng file
-    sng_files = [f for f in files if f.suffix.lower() == SNG_EXTENSION]
-    if sng_files:
+    if any(is_sng_file(f.name) for f in files):
         return ChartType.SNG
 
     # Zip file present (shouldn't happen normally, but might during download)
-    zip_files = [f for f in files if f.suffix.lower() in ZIP_EXTENSIONS]
-    if zip_files:
+    if any(is_zip_file(f.name) for f in files):
         return ChartType.ZIP
 
     # Check for chart markers (song.ini, notes.*)
-    has_ini = any(f.name.lower() in CHART_INI_FILES for f in files)
-    has_notes = any(f.name.lower() in CHART_NOTE_FILES for f in files)
-
-    if has_ini or has_notes:
+    if any(is_chart_marker_file(f.name) for f in files):
         return ChartType.FOLDER
 
     # Default
@@ -132,10 +142,11 @@ def create_chart(
         chart_type = detect_chart_type(files)
 
     # Create appropriate chart type
-    if chart_type == ChartType.SNG:
+    if chart_type in (ChartType.SNG, ChartType.ZIP):
+        chart_class = SngChart if chart_type == ChartType.SNG else ZipChart
         if files:
             f = files[0]
-            return SngChart.from_manifest_data(
+            return chart_class.from_manifest_data(
                 name=name,
                 file_id=f.get("id", remote_id),
                 local_base=local_base,
@@ -144,26 +155,7 @@ def create_chart(
                 filename=f.get("path", ""),
             )
         else:
-            return SngChart.from_manifest_data(
-                name=name,
-                file_id=remote_id,
-                local_base=local_base,
-                md5=checksum,
-            )
-
-    elif chart_type == ChartType.ZIP:
-        if files:
-            f = files[0]
-            return ZipChart.from_manifest_data(
-                name=name,
-                file_id=f.get("id", remote_id),
-                local_base=local_base,
-                size=f.get("size", 0),
-                md5=f.get("md5", checksum),
-                filename=f.get("path", ""),
-            )
-        else:
-            return ZipChart.from_manifest_data(
+            return chart_class.from_manifest_data(
                 name=name,
                 file_id=remote_id,
                 local_base=local_base,
@@ -275,18 +267,15 @@ def is_valid_chart_folder(files: List[dict]) -> bool:
     Returns:
         True if this looks like a valid chart
     """
-    filenames = {Path(f.get("path", "")).name.lower() for f in files}
+    filenames = [Path(f.get("path", "")).name for f in files]
 
-    # .sng file
-    if any(name.endswith(SNG_EXTENSION) for name in filenames):
+    # .sng or .zip file
+    if any(is_sng_file(name) or is_zip_file(name) for name in filenames):
         return True
 
-    # .zip file
-    if any(any(name.endswith(ext) for ext in ZIP_EXTENSIONS) for name in filenames):
-        return True
-
-    # Traditional chart files
-    has_ini = bool(filenames & CHART_INI_FILES)
-    has_notes = bool(filenames & CHART_NOTE_FILES)
+    # Traditional chart files - need both ini and notes
+    filenames_lower = {n.lower() for n in filenames}
+    has_ini = bool(filenames_lower & CHART_INI_FILES)
+    has_notes = bool(filenames_lower & CHART_NOTE_FILES)
 
     return has_ini and has_notes

@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 from .client import DriveClient
+from ..file_ops import file_exists_with_size
 
 
 @dataclass
@@ -169,6 +170,6 @@ class FolderScanner:
         # Add skip flag based on local file existence
         for f in result.files:
             local_path = local_base / f["path"]
-            f["skip"] = local_path.exists() and local_path.stat().st_size == f.get("size", 0)
+            f["skip"] = file_exists_with_size(local_path, f.get("size", 0))
 
         return result.files

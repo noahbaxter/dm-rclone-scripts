@@ -10,10 +10,9 @@ from pathlib import Path
 from typing import List, Dict
 
 from .detector import (
-    CHART_NOTE_FILES,
-    CHART_INI_FILES,
-    ZIP_EXTENSIONS,
-    SNG_EXTENSION,
+    is_sng_file,
+    is_zip_file,
+    has_folder_chart_markers,
 )
 from .base import ChartType
 from ..utils import sort_by_name
@@ -168,17 +167,13 @@ def _count_charts_in_subfolder(files: List[dict], subfolder_name: str) -> ChartC
     for parent_path, filenames in files_by_parent.items():
         # Check for standalone zip/sng files
         for filename in filenames:
-            if filename.endswith(SNG_EXTENSION):
+            if is_sng_file(filename):
                 counts.sng += 1
-            elif any(filename.endswith(ext) for ext in ZIP_EXTENSIONS):
+            elif is_zip_file(filename):
                 counts.zip += 1
 
         # Check if this folder is a chart folder (has song.ini or notes files)
-        filenames_set = set(filenames)
-        has_ini = bool(filenames_set & {f.lower() for f in CHART_INI_FILES})
-        has_notes = bool(filenames_set & {f.lower() for f in CHART_NOTE_FILES})
-
-        if has_ini or has_notes:
+        if has_folder_chart_markers(set(filenames)):
             chart_folders_found.add(parent_path)
 
     counts.folder = len(chart_folders_found)
@@ -190,10 +185,10 @@ def _count_root_charts(files: List[dict]) -> ChartCounts:
     counts = ChartCounts()
 
     for f in files:
-        path = f.get("path", "").lower()
-        if path.endswith(SNG_EXTENSION):
+        path = f.get("path", "")
+        if is_sng_file(path):
             counts.sng += 1
-        elif any(path.endswith(ext) for ext in ZIP_EXTENSIONS):
+        elif is_zip_file(path):
             counts.zip += 1
 
     return counts
@@ -209,21 +204,15 @@ def _detect_chart_type_from_filenames(filenames: List[str]) -> ChartType | None:
     Returns:
         Detected ChartType, or None if not a chart
     """
-    filenames_set = set(filenames)
-
-    # Check for .sng files
-    if any(f.endswith(SNG_EXTENSION) for f in filenames):
-        return ChartType.SNG
-
-    # Check for archive files
-    if any(any(f.endswith(ext) for ext in ZIP_EXTENSIONS) for f in filenames):
-        return ChartType.ZIP
+    # Check for .sng or archive files
+    for f in filenames:
+        if is_sng_file(f):
+            return ChartType.SNG
+        if is_zip_file(f):
+            return ChartType.ZIP
 
     # Check for traditional folder chart markers (needs song.ini or notes file)
-    has_ini = bool(filenames_set & {f.lower() for f in CHART_INI_FILES})
-    has_notes = bool(filenames_set & {f.lower() for f in CHART_NOTE_FILES})
-
-    if has_ini or has_notes:
+    if has_folder_chart_markers(set(filenames)):
         return ChartType.FOLDER
 
     # Not a chart folder

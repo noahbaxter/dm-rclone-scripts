@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
-from .utils import name_sort_key
+from .utils import name_sort_key, format_size
 
 
 @dataclass
@@ -251,16 +251,6 @@ class Manifest:
             from .ui.colors import Colors
         except ImportError:
             from colors import Colors
-
-        def format_size(size_bytes: int) -> str:
-            if size_bytes < 1024:
-                return f"{size_bytes}B"
-            elif size_bytes < 1024 * 1024:
-                return f"{size_bytes / 1024:.1f}KB"
-            elif size_bytes < 1024 * 1024 * 1024:
-                return f"{size_bytes / (1024 * 1024):.1f}MB"
-            else:
-                return f"{size_bytes / (1024 * 1024 * 1024):.1f}GB"
 
         def get_sort_key(item, is_folder=False):
             if is_folder:
