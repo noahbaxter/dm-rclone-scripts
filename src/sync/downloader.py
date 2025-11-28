@@ -8,6 +8,7 @@ Uses asyncio + aiohttp for efficient concurrent downloads.
 import asyncio
 import json
 import os
+import ssl
 import sys
 import shutil
 import signal
@@ -19,10 +20,23 @@ from typing import Callable, Optional, Tuple, List
 from dataclasses import dataclass
 
 import aiohttp
+import certifi
 
 from ..constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS, VIDEO_EXTENSIONS
 from ..file_ops import file_exists_with_size
 from .progress import ProgressTracker
+
+
+def get_certifi_path() -> str:
+    """Get path to certifi CA bundle, handling PyInstaller bundles."""
+    # Check if running from PyInstaller bundle
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        # Running from PyInstaller bundle - look for bundled cert
+        bundled_cert = os.path.join(sys._MEIPASS, 'certifi', 'cacert.pem')
+        if os.path.exists(bundled_cert):
+            return bundled_cert
+    # Fall back to installed certifi
+    return certifi.where()
 
 # Optional archive format support
 try:
@@ -556,6 +570,10 @@ class FileDownloader:
 
         semaphore = asyncio.Semaphore(self.max_workers)
 
+        # Create SSL context using certifi's CA bundle
+        # This is required for PyInstaller builds which don't have system certs
+        ssl_context = ssl.create_default_context(cafile=get_certifi_path())
+
         # Create connector with generous connection pooling
         # For many small files, we want lots of concurrent connections
         connector = aiohttp.TCPConnector(
@@ -563,6 +581,7 @@ class FileDownloader:
             limit_per_host=self.max_workers,  # All to Google Drive
             ttl_dns_cache=300,
             keepalive_timeout=30,  # Reuse connections
+            ssl=ssl_context,
         )
 
         async with aiohttp.ClientSession(timeout=self.timeout, connector=connector) as session:

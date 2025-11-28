@@ -65,12 +65,25 @@ jobs:
       - name: Build executable (macOS)
         if: matrix.name == 'macos'
         run: |
-          pyinstaller --onefile --name dm-sync-macos --clean --noconfirm --add-data "drives.json:." sync.py
+          # Include certifi CA bundle for SSL verification in bundled app
+          CERTIFI_PATH=$(python -c "import certifi; print(certifi.where())")
+          pyinstaller --onefile --name dm-sync-macos --clean --noconfirm \
+            --add-data "drives.json:." \
+            --add-data "$CERTIFI_PATH:certifi" \
+            --hidden-import certifi \
+            sync.py
 
       - name: Build executable (Windows)
         if: matrix.name == 'windows'
         run: |
-          pyinstaller --onefile --name dm-sync --clean --noconfirm --add-data "drives.json;." sync.py
+          # Include certifi CA bundle for SSL verification in bundled app
+          $CERTIFI_PATH = python -c "import certifi; print(certifi.where())"
+          pyinstaller --onefile --name dm-sync --clean --noconfirm `
+            --add-data "drives.json;." `
+            --add-data "$CERTIFI_PATH;certifi" `
+            --hidden-import certifi `
+            sync.py
+        shell: pwsh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
