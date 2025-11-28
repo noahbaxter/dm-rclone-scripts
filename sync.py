@@ -43,9 +43,17 @@ DOWNLOAD_FOLDER = "Sync Charts"  # Folder next to the app
 
 
 def get_app_dir() -> Path:
-    """Get the directory where the app is located."""
+    """Get the directory where the app is located (for user-writable files)."""
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
+    return Path(__file__).parent
+
+
+def get_bundle_dir() -> Path:
+    """Get the directory where bundled resources are located (PyInstaller)."""
+    if getattr(sys, "frozen", False):
+        # PyInstaller extracts bundled files to _MEIPASS temp directory
+        return Path(sys._MEIPASS)
     return Path(__file__).parent
 
 
@@ -65,8 +73,8 @@ def get_user_settings_path() -> Path:
 
 
 def get_drives_config_path() -> Path:
-    """Get path to drives config file."""
-    return get_app_dir() / "drives.json"
+    """Get path to drives config file (bundled with app)."""
+    return get_bundle_dir() / "drives.json"
 
 
 def fetch_manifest(use_local: bool = False) -> dict:
