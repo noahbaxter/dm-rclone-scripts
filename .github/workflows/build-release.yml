@@ -118,7 +118,7 @@ jobs:
           - Zero-setup chart downloads from Google Drive
           - Smart sync (only downloads new/changed files)
           - Pause/Stop with ESC key
-          - Charter filtering (choose which charters to sync)
+          - Setlist filtering (choose which setlists to sync)
           - Custom download paths
           - Parallel downloads
           EOF

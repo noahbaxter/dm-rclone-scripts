@@ -12,41 +12,36 @@ from ..sync.operations import get_sync_status, count_purgeable_charts
 from .menu import Menu, MenuItem, MenuDivider, MenuGroupHeader, MenuResult
 
 
-def _build_folder_stats(folder: dict, user_settings: UserSettings = None) -> str | None:
+def _build_folder_stats(folder: dict, user_settings: UserSettings = None, download_path: Path = None) -> str | None:
     """Build stats string for a folder menu item."""
     folder_id = folder.get("folder_id", "")
     stats_parts = []
 
-    charters = extract_subfolders_from_manifest(folder)
-    charter_stats = {sf.get("name"): sf for sf in folder.get("subfolders", [])}
+    # Get sync status for enabled setlists only
+    synced_charts = 0
+    synced_size = 0
+    total_charts = 0
+    if download_path:
+        status = get_sync_status([folder], download_path, user_settings)
+        synced_charts = status.synced_charts
+        synced_size = status.synced_size
+        total_charts = status.total_charts
 
-    if charters and user_settings:
-        enabled_charters = [
-            c for c in charters
+    setlists = extract_subfolders_from_manifest(folder)
+
+    # Show downloaded/total for enabled setlists
+    if total_charts:
+        stats_parts.append(f"{synced_charts}/{total_charts} charts")
+
+    if setlists and user_settings:
+        enabled_setlists = [
+            c for c in setlists
             if user_settings.is_subfolder_enabled(folder_id, c)
         ]
-        enabled_charts = sum(
-            charter_stats.get(c, {}).get("charts", {}).get("total", 0)
-            for c in enabled_charters
-        )
-        enabled_size = sum(
-            charter_stats.get(c, {}).get("total_size", 0)
-            for c in enabled_charters
-        )
-        total_charts = folder.get("chart_count", 0)
+        stats_parts.append(f"{len(enabled_setlists)}/{len(setlists)} setlists")
 
-        if total_charts:
-            stats_parts.append(f"{enabled_charts}/{total_charts} charts")
-        stats_parts.append(f"{len(enabled_charters)}/{len(charters)} charters")
-        if enabled_size:
-            stats_parts.append(format_size(enabled_size))
-    else:
-        chart_count = folder.get("chart_count", 0)
-        total_size = folder.get("total_size", 0)
-        if chart_count:
-            stats_parts.append(f"{chart_count} charts")
-        if total_size:
-            stats_parts.append(format_size(total_size))
+    # Show downloaded size
+    stats_parts.append(format_size(synced_size))
 
     return ", ".join(stats_parts) if stats_parts else None
 
@@ -73,13 +68,17 @@ def show_main_menu(folders: list, user_settings: UserSettings = None, selected_i
     # Calculate sync status for subtitle
     subtitle = ""
     if download_path and folders:
-        status = get_sync_status(folders, download_path, user_settings)
-        if status.total_charts > 0:
-            pct = (status.synced_charts / status.total_charts) * 100
-            if status.is_synced:
-                subtitle = f"Synced: {status.synced_charts:,} charts ({format_size(status.synced_size)})"
-            else:
-                subtitle = f"Synced: {pct:.0f}% ({status.synced_charts:,}/{status.total_charts:,} charts, {format_size(status.missing_size)} remaining)"
+        # Get raw downloaded count (ignore what's enabled)
+        raw_status = get_sync_status(folders, download_path, user_settings=None)
+        # Get enabled status (filtered by user settings)
+        enabled_status = get_sync_status(folders, download_path, user_settings)
+
+        pct = (enabled_status.synced_charts / enabled_status.total_charts * 100) if enabled_status.total_charts > 0 else 0
+        subtitle = (
+            f"Downloaded: {raw_status.synced_charts:,} charts ({format_size(raw_status.synced_size)}) | "
+            f"Syncing: {enabled_status.total_charts:,} charts ({format_size(enabled_status.total_size)}) | "
+            f"{pct:.0f}% synced"
+        )
 
     menu = Menu(title="Available chart packs:", subtitle=subtitle, space_hint="Toggle")
 
@@ -103,7 +102,7 @@ def show_main_menu(folders: list, user_settings: UserSettings = None, selected_i
         nonlocal hotkey_num
         folder_id = folder.get("folder_id", "")
         drive_enabled = user_settings.is_drive_enabled(folder_id) if user_settings else True
-        stats = _build_folder_stats(folder, user_settings)
+        stats = _build_folder_stats(folder, user_settings, download_path)
 
         # Hotkeys only for first 9 ungrouped folders
         hotkey = None
@@ -203,7 +202,7 @@ def show_main_menu(folders: list, user_settings: UserSettings = None, selected_i
 
 def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_path: Path = None) -> bool:
     """
-    Show toggle menu for charters within a drive.
+    Show toggle menu for setlists within a drive.
 
     Args:
         folder: Folder dict from manifest
@@ -214,13 +213,13 @@ def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_
     """
     folder_id = folder.get("folder_id", "")
     folder_name = folder.get("name", "Unknown")
-    charters = extract_subfolders_from_manifest(folder)
+    setlists = extract_subfolders_from_manifest(folder)
 
-    if not charters:
+    if not setlists:
         return False
 
-    # Build lookup for charter stats from manifest
-    charter_stats = {sf.get("name"): sf for sf in folder.get("subfolders", [])}
+    # Build lookup for setlist stats from manifest
+    setlist_stats = {sf.get("name"): sf for sf in folder.get("subfolders", [])}
 
     changed = False
     selected_index = 0  # Track menu position to maintain after any action
@@ -242,14 +241,14 @@ def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_
                 else:
                     subtitle = f"Synced: {pct:.0f}% ({status.synced_charts:,}/{status.total_charts:,} charts)"
 
-        menu = Menu(title=f"{folder_name} - Charters:", subtitle=subtitle, space_hint="Toggle")
+        menu = Menu(title=f"{folder_name} - Setlists:", subtitle=subtitle, space_hint="Toggle")
 
-        # Add charter toggle items (no hotkeys - too many charters)
-        for i, charter_name in enumerate(charters):
-            charter_enabled = user_settings.is_subfolder_enabled(folder_id, charter_name)
+        # Add setlist toggle items (no hotkeys - too many setlists)
+        for i, setlist_name in enumerate(setlists):
+            setlist_enabled = user_settings.is_subfolder_enabled(folder_id, setlist_name)
 
-            # Get charter stats
-            stats = charter_stats.get(charter_name, {})
+            # Get setlist stats
+            stats = setlist_stats.get(setlist_name, {})
             chart_count = stats.get("charts", {}).get("total", 0)
             total_size = stats.get("total_size", 0)
 
@@ -263,10 +262,10 @@ def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_
 
             # If drive is disabled, all items appear disabled (greyed out)
             # show_toggle only shows colored [ON] when drive is also enabled
-            item_disabled = not charter_enabled or not drive_enabled
-            show_toggle_colored = charter_enabled and drive_enabled
+            item_disabled = not setlist_enabled or not drive_enabled
+            show_toggle_colored = setlist_enabled and drive_enabled
 
-            menu.add_item(MenuItem(charter_name, value=("toggle", i, charter_name), description=description, disabled=item_disabled, show_toggle=show_toggle_colored))
+            menu.add_item(MenuItem(setlist_name, value=("toggle", i, setlist_name), description=description, disabled=item_disabled, show_toggle=show_toggle_colored))
 
         menu.add_item(MenuDivider())
 
@@ -285,7 +284,7 @@ def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_
         if result is None or result.value[0] == "back":
             break
 
-        action, idx, charter_name = result.value
+        action, idx, setlist_name = result.value
 
         if action == "enable_drive":
             # Re-enable the drive
@@ -297,21 +296,21 @@ def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_
         elif action == "enable_all":
             # Use position before hotkey was pressed
             selected_index = menu._selected_before_hotkey
-            user_settings.enable_all(folder_id, charters)
+            user_settings.enable_all(folder_id, setlists)
             user_settings.save()
             changed = True
 
         elif action == "disable_all":
             # Use position before hotkey was pressed
             selected_index = menu._selected_before_hotkey
-            user_settings.disable_all(folder_id, charters)
+            user_settings.disable_all(folder_id, setlists)
             user_settings.save()
             changed = True
 
         elif action == "toggle":
             # Keep current position for toggle actions
             selected_index = menu._selected
-            user_settings.toggle_subfolder(folder_id, charter_name)
+            user_settings.toggle_subfolder(folder_id, setlist_name)
             user_settings.save()
             changed = True
 
