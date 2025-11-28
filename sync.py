@@ -23,6 +23,7 @@ from src import (
     show_main_menu,
     show_subfolder_settings,
     UserSettings,
+    DrivesConfig,
     extract_subfolders_from_manifest,
 )
 from src.drive.client import DriveClientConfig
@@ -56,6 +57,11 @@ def get_manifest_path() -> Path:
 def get_user_settings_path() -> Path:
     """Get path to user settings file."""
     return get_app_dir() / "user_settings.json"
+
+
+def get_drives_config_path() -> Path:
+    """Get path to drives config file."""
+    return get_app_dir() / "drives.json"
 
 
 def fetch_manifest(use_local: bool = False) -> dict:
@@ -102,6 +108,7 @@ class SyncApp:
         self.sync = FolderSync(self.client)
         self.folders = []
         self.user_settings = UserSettings.load(get_user_settings_path())
+        self.drives_config = DrivesConfig.load(get_drives_config_path())
         self.use_local_manifest = use_local_manifest
 
     def load_manifest(self):
@@ -133,18 +140,28 @@ class SyncApp:
         """Purge disabled/extra files from all folders."""
         purge_all_folders(self.folders, get_download_path(), self.user_settings)
 
-    def handle_configure_drive(self, drive_index: int):
+    def handle_configure_drive(self, folder_id: str):
         """Configure charters for a specific drive."""
-        folder = self.folders[drive_index]
-        show_subfolder_settings(folder, self.user_settings, get_download_path())
+        folder = self._get_folder_by_id(folder_id)
+        if folder:
+            show_subfolder_settings(folder, self.user_settings, get_download_path())
 
-    def handle_toggle_drive(self, drive_index: int):
+    def handle_toggle_drive(self, folder_id: str):
         """Toggle a drive on/off at the top level (preserves charter settings)."""
-        folder = self.folders[drive_index]
-        folder_id = folder.get("folder_id", "")
-
         self.user_settings.toggle_drive(folder_id)
         self.user_settings.save()
+
+    def handle_toggle_group(self, group_name: str):
+        """Toggle a group expanded/collapsed."""
+        self.user_settings.toggle_group_expanded(group_name)
+        self.user_settings.save()
+
+    def _get_folder_by_id(self, folder_id: str) -> dict | None:
+        """Get folder dict by folder_id."""
+        for folder in self.folders:
+            if folder.get("folder_id", "") == folder_id:
+                return folder
+        return None
 
     def _get_disabled_subfolders_for_folders(self, indices: list) -> dict[str, list[str]]:
         """
@@ -177,7 +194,10 @@ class SyncApp:
                 print("No folders available!")
                 print()
 
-            action, value, menu_pos = show_main_menu(self.folders, self.user_settings, selected_index, get_download_path())
+            action, value, menu_pos = show_main_menu(
+                self.folders, self.user_settings, selected_index,
+                get_download_path(), self.drives_config
+            )
             selected_index = menu_pos  # Always preserve menu position
 
             if action == "quit":
@@ -193,13 +213,15 @@ class SyncApp:
 
             elif action == "configure":
                 # Enter on a drive - go directly to configure that drive
-                if 0 <= value < len(self.folders):
-                    self.handle_configure_drive(value)
+                self.handle_configure_drive(value)
 
             elif action == "toggle":
                 # Space on a drive - toggle drive on/off
-                if 0 <= value < len(self.folders):
-                    self.handle_toggle_drive(value)
+                self.handle_toggle_drive(value)
+
+            elif action == "toggle_group":
+                # Enter/Space on a group - expand/collapse
+                self.handle_toggle_group(value)
 
 
 def main():

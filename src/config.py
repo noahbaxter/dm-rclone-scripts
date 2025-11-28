@@ -20,13 +20,17 @@ class DriveConfig:
     name: str
     folder_id: str
     description: str = ""
+    group: str = ""  # Optional group name for categorization
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "name": self.name,
             "folder_id": self.folder_id,
             "description": self.description,
         }
+        if self.group:
+            d["group"] = self.group
+        return d
 
     @classmethod
     def from_dict(cls, data: dict) -> "DriveConfig":
@@ -34,6 +38,7 @@ class DriveConfig:
             name=data.get("name", ""),
             folder_id=data.get("folder_id", ""),
             description=data.get("description", ""),
+            group=data.get("group", ""),
         )
 
 
@@ -85,6 +90,24 @@ class DrivesConfig:
         """Convert to the ROOT_FOLDERS format used by manifest_gen.py."""
         return [d.to_dict() for d in self.drives]
 
+    def get_groups(self) -> list[str]:
+        """Get unique group names in order of first appearance."""
+        seen = set()
+        groups = []
+        for drive in self.drives:
+            if drive.group and drive.group not in seen:
+                seen.add(drive.group)
+                groups.append(drive.group)
+        return groups
+
+    def get_drives_in_group(self, group: str) -> list[DriveConfig]:
+        """Get all drives in a specific group."""
+        return [d for d in self.drives if d.group == group]
+
+    def get_ungrouped_drives(self) -> list[DriveConfig]:
+        """Get drives that don't belong to any group."""
+        return [d for d in self.drives if not d.group]
+
 
 class UserSettings:
     """
@@ -101,6 +124,8 @@ class UserSettings:
         self.drive_toggles: dict[str, bool] = {}
         # Subfolder toggles: { drive_folder_id: { subfolder_name: enabled_bool } }
         self.subfolder_toggles: dict[str, dict[str, bool]] = {}
+        # Group expanded state: { group_name: expanded_bool }
+        self.group_expanded: dict[str, bool] = {}
 
     @classmethod
     def load(cls, path: Path) -> "UserSettings":
@@ -114,6 +139,7 @@ class UserSettings:
 
                 settings.drive_toggles = data.get("drive_toggles", {})
                 settings.subfolder_toggles = data.get("subfolder_toggles", {})
+                settings.group_expanded = data.get("group_expanded", {})
             except (json.JSONDecodeError, IOError):
                 pass
 
@@ -123,7 +149,8 @@ class UserSettings:
         """Save user settings to file."""
         data = {
             "drive_toggles": self.drive_toggles,
-            "subfolder_toggles": self.subfolder_toggles
+            "subfolder_toggles": self.subfolder_toggles,
+            "group_expanded": self.group_expanded,
         }
         with open(self.path, "w") as f:
             json.dump(data, f, indent=2)
@@ -180,6 +207,19 @@ class UserSettings:
             self.subfolder_toggles[drive_id] = {}
         for name in subfolder_names:
             self.subfolder_toggles[drive_id][name] = False
+
+    def is_group_expanded(self, group_name: str) -> bool:
+        """Check if a group is expanded (Drums defaults to True, others False)."""
+        if group_name not in self.group_expanded:
+            # Default: Drums expanded, others collapsed
+            return group_name == "Drums"
+        return self.group_expanded.get(group_name, False)
+
+    def toggle_group_expanded(self, group_name: str) -> bool:
+        """Toggle a group's expanded state. Returns the new state."""
+        current = self.is_group_expanded(group_name)
+        self.group_expanded[group_name] = not current
+        return not current
 
 
 def extract_subfolders_from_manifest(folder: dict) -> list[str]:

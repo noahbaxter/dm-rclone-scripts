@@ -12,7 +12,7 @@ import shutil
 from dataclasses import dataclass, field
 from typing import Any
 
-from .keyboard import getch, KEY_UP, KEY_DOWN, KEY_ENTER, KEY_ESC, KEY_SPACE
+from .keyboard import getch, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_ENTER, KEY_ESC, KEY_SPACE
 from .colors import Colors, rgb, lerp_color
 from ..utils import clear_screen
 
@@ -136,6 +136,21 @@ class MenuDivider:
 
 
 @dataclass
+class MenuGroupHeader:
+    """A collapsible group header in the menu."""
+    label: str
+    group_name: str
+    expanded: bool = False
+    value: Any = None
+    drive_count: int = 0  # Number of drives in this group
+    enabled_count: int = 0  # Number of enabled drives in this group
+
+    def __post_init__(self):
+        if self.value is None:
+            self.value = ("group", self.group_name)
+
+
+@dataclass
 class MenuAction(MenuItem):
     pass
 
@@ -176,7 +191,7 @@ class Menu:
         self.items.append(item)
 
     def _selectable(self) -> list[int]:
-        return [i for i, item in enumerate(self.items) if isinstance(item, (MenuItem, MenuAction))]
+        return [i for i, item in enumerate(self.items) if isinstance(item, (MenuItem, MenuAction, MenuGroupHeader))]
 
     def _width(self) -> int:
         w = 40
@@ -188,6 +203,8 @@ class Menu:
             if isinstance(item, (MenuItem, MenuAction)):
                 length = len(item.label) + (len(item.description) + 3 if item.description else 0) + 8
                 w = max(w, length)
+            elif isinstance(item, MenuGroupHeader):
+                w = max(w, len(item.label) + 10)
         return min(w + 4, shutil.get_terminal_size().columns - 2)
 
     def _render(self):
@@ -217,6 +234,22 @@ class Menu:
         for i, item in enumerate(self.items):
             if isinstance(item, MenuDivider):
                 print(_box_row(BOX_TL_DIV, BOX_H, BOX_TR_DIV, w, c))
+            elif isinstance(item, MenuGroupHeader):
+                selected = (i == self._selected)
+                # Group header with expand/collapse indicator and bracket label
+                indicator = "▼" if item.expanded else "▶"
+                label_upper = item.label.upper()
+                # Show enabled/total count when collapsed
+                count_str = ""
+                if not item.expanded and item.drive_count > 0:
+                    count_str = f" {Colors.MUTED}({item.enabled_count}/{item.drive_count} drives){Colors.RESET}"
+                if selected:
+                    content = f"{Colors.PINK}▸{Colors.RESET} {Colors.MUTED}{indicator}{Colors.RESET} {Colors.HOTKEY}[{label_upper}]{Colors.RESET}{count_str}"
+                else:
+                    content = f"  {Colors.MUTED}{indicator}{Colors.RESET} {Colors.HOTKEY}[{label_upper}]{Colors.RESET}{count_str}"
+                visible = len(strip_ansi(content))
+                pad = w - 4 - visible
+                print(f"{c}{BOX_V}{Colors.RESET} {content}{' ' * pad} {c}{BOX_V}{Colors.RESET}")
             elif isinstance(item, (MenuItem, MenuAction)):
                 selected = (i == self._selected)
                 is_disabled = getattr(item, 'disabled', False)
@@ -337,6 +370,12 @@ class Menu:
 
             elif key == KEY_SPACE:
                 return MenuResult(self.items[self._selected], "space")
+
+            elif key == KEY_LEFT or key == KEY_RIGHT:
+                # LEFT/RIGHT on a group header toggles expand/collapse
+                current_item = self.items[self._selected]
+                if isinstance(current_item, MenuGroupHeader):
+                    return MenuResult(current_item, "enter")
 
             elif isinstance(key, str) and len(key) == 1:
                 upper = key.upper()

@@ -7,12 +7,51 @@ Handles menu display, user input, and terminal operations.
 from pathlib import Path
 
 from ..utils import format_size, clear_screen
-from ..config import UserSettings, extract_subfolders_from_manifest
+from ..config import UserSettings, DrivesConfig, extract_subfolders_from_manifest
 from ..sync.operations import get_sync_status, count_purgeable_charts
-from .menu import Menu, MenuItem, MenuDivider, MenuResult
+from .menu import Menu, MenuItem, MenuDivider, MenuGroupHeader, MenuResult
 
 
-def show_main_menu(folders: list, user_settings: UserSettings = None, selected_index: int = 0, download_path: Path = None) -> tuple[str, str | int | None, int]:
+def _build_folder_stats(folder: dict, user_settings: UserSettings = None) -> str | None:
+    """Build stats string for a folder menu item."""
+    folder_id = folder.get("folder_id", "")
+    stats_parts = []
+
+    charters = extract_subfolders_from_manifest(folder)
+    charter_stats = {sf.get("name"): sf for sf in folder.get("subfolders", [])}
+
+    if charters and user_settings:
+        enabled_charters = [
+            c for c in charters
+            if user_settings.is_subfolder_enabled(folder_id, c)
+        ]
+        enabled_charts = sum(
+            charter_stats.get(c, {}).get("charts", {}).get("total", 0)
+            for c in enabled_charters
+        )
+        enabled_size = sum(
+            charter_stats.get(c, {}).get("total_size", 0)
+            for c in enabled_charters
+        )
+        total_charts = folder.get("chart_count", 0)
+
+        if total_charts:
+            stats_parts.append(f"{enabled_charts}/{total_charts} charts")
+        stats_parts.append(f"{len(enabled_charters)}/{len(charters)} charters")
+        if enabled_size:
+            stats_parts.append(format_size(enabled_size))
+    else:
+        chart_count = folder.get("chart_count", 0)
+        total_size = folder.get("total_size", 0)
+        if chart_count:
+            stats_parts.append(f"{chart_count} charts")
+        if total_size:
+            stats_parts.append(format_size(total_size))
+
+    return ", ".join(stats_parts) if stats_parts else None
+
+
+def show_main_menu(folders: list, user_settings: UserSettings = None, selected_index: int = 0, download_path: Path = None, drives_config: DrivesConfig = None) -> tuple[str, str | int | None, int]:
     """
     Show main menu and get user selection.
 
@@ -21,13 +60,15 @@ def show_main_menu(folders: list, user_settings: UserSettings = None, selected_i
         user_settings: User settings for checking charter enabled states
         selected_index: Index to keep selected (for maintaining position after toggle)
         download_path: Path to download folder for sync status calculation
+        drives_config: Drive configuration with group information
 
     Returns tuple of (action, value, menu_position):
         - ("quit", None, pos) - user wants to quit
         - ("download", None, pos) - download all enabled
         - ("purge", None, pos) - purge extra files
-        - ("configure", index, pos) - configure specific drive (enter on drive)
-        - ("toggle", index, pos) - toggle drive on/off (space on drive)
+        - ("configure", folder_id, pos) - configure specific drive (enter on drive)
+        - ("toggle", folder_id, pos) - toggle drive on/off (space on drive)
+        - ("toggle_group", group_name, pos) - expand/collapse group
     """
     # Calculate sync status for subtitle
     subtitle = ""
@@ -42,62 +83,84 @@ def show_main_menu(folders: list, user_settings: UserSettings = None, selected_i
 
     menu = Menu(title="Available chart packs:", subtitle=subtitle, space_hint="Toggle")
 
-    # Add folder items with number hotkeys
-    for i, folder in enumerate(folders, 1):
+    # Build folder lookup by folder_id
+    folder_lookup = {f.get("folder_id", ""): f for f in folders}
+
+    # Build group membership from drives_config
+    grouped_folder_ids = set()  # All folder_ids that belong to a group
+    groups = []
+    if drives_config:
+        groups = drives_config.get_groups()
+        for drive in drives_config.drives:
+            if drive.group:
+                grouped_folder_ids.add(drive.folder_id)
+
+    # Track which folders we've added to the menu
+    added_folders = set()
+    hotkey_num = 1
+
+    def add_folder_item(folder: dict, indent: bool = False):
+        nonlocal hotkey_num
         folder_id = folder.get("folder_id", "")
-
-        # Check if drive is enabled at top level
         drive_enabled = user_settings.is_drive_enabled(folder_id) if user_settings else True
+        stats = _build_folder_stats(folder, user_settings)
 
-        # Build stats string
-        stats_parts = []
+        # Hotkeys only for first 9 ungrouped folders
+        hotkey = None
+        if not indent and hotkey_num <= 9:
+            hotkey = str(hotkey_num)
+            hotkey_num += 1
 
-        # Calculate enabled charts/size based on charter selection
-        charters = extract_subfolders_from_manifest(folder)
-        charter_stats = {sf.get("name"): sf for sf in folder.get("subfolders", [])}
-
-        if charters and user_settings:
-            enabled_charters = [
-                c for c in charters
-                if user_settings.is_subfolder_enabled(folder_id, c)
-            ]
-
-            # Sum charts and size from enabled charters only
-            enabled_charts = sum(
-                charter_stats.get(c, {}).get("charts", {}).get("total", 0)
-                for c in enabled_charters
-            )
-            enabled_size = sum(
-                charter_stats.get(c, {}).get("total_size", 0)
-                for c in enabled_charters
-            )
-            total_charts = folder.get("chart_count", 0)
-
-            if total_charts:
-                stats_parts.append(f"{enabled_charts}/{total_charts} charts")
-            stats_parts.append(f"{len(enabled_charters)}/{len(charters)} charters")
-            if enabled_size:
-                stats_parts.append(format_size(enabled_size))
-        else:
-            # No charters or settings, show totals
-            chart_count = folder.get("chart_count", 0)
-            total_size = folder.get("total_size", 0)
-            if chart_count:
-                stats_parts.append(f"{chart_count} charts")
-            if total_size:
-                stats_parts.append(format_size(total_size))
-
-        stats = ", ".join(stats_parts) if stats_parts else None
-
-        # Use 1-9 for first 9 folders (store 0-based index)
-        hotkey = str(i) if i <= 9 else None
+        label = f"  {folder['name']}" if indent else folder['name']
         menu.add_item(MenuItem(
-            folder['name'],
+            label,
             hotkey=hotkey,
-            value=i - 1,
+            value=folder_id,
             description=stats,
             disabled=not drive_enabled
         ))
+        added_folders.add(folder_id)
+
+    # First, add ungrouped folders
+    if drives_config:
+        for drive in drives_config.get_ungrouped_drives():
+            folder = folder_lookup.get(drive.folder_id)
+            if folder:
+                add_folder_item(folder)
+
+    # Then add groups with their folders
+    for group_name in groups:
+        expanded = user_settings.is_group_expanded(group_name) if user_settings else False
+
+        # Count drives and enabled drives in this group
+        group_drives = drives_config.get_drives_in_group(group_name) if drives_config else []
+        drive_count = len(group_drives)
+        enabled_count = sum(
+            1 for d in group_drives
+            if (user_settings.is_drive_enabled(d.folder_id) if user_settings else True)
+        )
+
+        menu.add_item(MenuGroupHeader(
+            label=group_name,
+            group_name=group_name,
+            expanded=expanded,
+            drive_count=drive_count,
+            enabled_count=enabled_count
+        ))
+
+        for drive in group_drives:
+            # Mark as added even if collapsed (so they don't appear separately)
+            added_folders.add(drive.folder_id)
+            if expanded:
+                folder = folder_lookup.get(drive.folder_id)
+                if folder:
+                    add_folder_item(folder, indent=True)
+
+    # Add any folders not in drives_config (fallback for manifest folders not in config)
+    for folder in folders:
+        folder_id = folder.get("folder_id", "")
+        if folder_id not in added_folders:
+            add_folder_item(folder)
 
     # Divider before actions
     menu.add_item(MenuDivider())
@@ -122,8 +185,12 @@ def show_main_menu(folders: list, user_settings: UserSettings = None, selected_i
     # Get position to restore (use pre-hotkey position for hotkey actions)
     restore_pos = menu._selected_before_hotkey if menu._selected_before_hotkey != menu._selected else menu._selected
 
-    # Handle drive items (numbered items have int index as value)
-    if isinstance(result.value, int):
+    # Handle group headers (expand/collapse)
+    if isinstance(result.value, tuple) and len(result.value) == 2 and result.value[0] == "group":
+        return ("toggle_group", result.value[1], menu._selected)
+
+    # Handle drive items (folder_id strings)
+    if isinstance(result.value, str) and not result.value.startswith(("download", "purge", "quit")):
         if result.action == "space":
             return ("toggle", result.value, menu._selected)
         else:  # enter
