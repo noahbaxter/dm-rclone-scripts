@@ -14,7 +14,7 @@ from ..file_ops import find_unexpected_files_with_sizes
 from ..utils import format_size, format_duration, print_progress
 from ..drive import DriveClient, FolderScanner
 from ..ui.keyboard import wait_with_skip
-from .downloader import FileDownloader
+from .downloader import FileDownloader, read_checksum, read_checksum_data, is_archive_file, get_folder_size
 
 
 @dataclass
@@ -65,24 +65,25 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
         if not manifest_files:
             continue
 
-        # Get disabled charters
-        disabled_charters = set()
+        # Get disabled setlists
+        disabled_setlists = set()
         if user_settings:
-            disabled_charters = user_settings.get_disabled_subfolders(folder_id)
+            disabled_setlists = user_settings.get_disabled_subfolders(folder_id)
 
         # Group files by parent folder to identify charts
-        # chart_folders: {parent_path: {files: [...], is_chart: bool, total_size: int}}
-        chart_folders = defaultdict(lambda: {"files": [], "is_chart": False, "total_size": 0})
+        # chart_folders: {parent_path: {files: [...], is_chart: bool, total_size: int, archive_md5: str}}
+        chart_folders = defaultdict(lambda: {"files": [], "is_chart": False, "total_size": 0, "archive_md5": ""})
 
         for f in manifest_files:
             file_path = f.get("path", "")
             file_size = f.get("size", 0)
+            file_md5 = f.get("md5", "")
             file_name = file_path.split("/")[-1].lower() if "/" in file_path else file_path.lower()
 
-            # Skip files in disabled charters
-            if disabled_charters:
+            # Skip files in disabled setlists
+            if disabled_setlists:
                 parts = file_path.split("/")
-                if parts and parts[0] in disabled_charters:
+                if parts and parts[0] in disabled_setlists:
                     continue
 
             # Get parent folder path
@@ -98,8 +99,9 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
             if file_name in CHART_MARKERS:
                 chart_folders[parent]["is_chart"] = True
             # Check for archive files (.zip, .7z, .rar)
-            elif any(file_name.endswith(ext) for ext in CHART_ARCHIVE_EXTENSIONS):
+            elif is_archive_file(file_name):
                 chart_folders[parent]["is_chart"] = True
+                chart_folders[parent]["archive_md5"] = file_md5
 
         # Count charts (folders with markers or archives)
         for parent, data in chart_folders.items():
@@ -109,7 +111,20 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
             status.total_charts += 1
             status.total_size += data["total_size"]
 
-            # Check if all files in this chart exist locally
+            # For archive charts, check if check.txt has matching MD5
+            if data["archive_md5"]:
+                chart_folder = folder_path / parent
+                checksum_data = read_checksum_data(chart_folder)
+                if checksum_data.get("md5") == data["archive_md5"]:
+                    status.synced_charts += 1
+                    # Use actual extracted size if available, otherwise calculate from folder
+                    extracted_size = checksum_data.get("size", 0)
+                    if not extracted_size and chart_folder.exists():
+                        extracted_size = get_folder_size(chart_folder)
+                    status.synced_size += extracted_size if extracted_size else data["total_size"]
+                continue
+
+            # For folder charts, check if all files exist locally
             all_synced = True
             synced_size = 0
             for file_path, file_size in data["files"]:
@@ -135,9 +150,9 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
 class FolderSync:
     """Handles syncing folders from Google Drive to local disk."""
 
-    def __init__(self, client: DriveClient, auth_token: str = None):
+    def __init__(self, client: DriveClient, auth_token: str = None, delete_videos: bool = True):
         self.client = client
-        self.downloader = FileDownloader(auth_token=auth_token)
+        self.downloader = FileDownloader(auth_token=auth_token, delete_videos=delete_videos)
 
     def sync_folder(
         self,
@@ -319,6 +334,9 @@ def find_extra_files(folder: dict, base_path: Path) -> list:
     """
     Find local files not in the manifest.
 
+    For archive charts, if check.txt exists with matching MD5, the entire
+    chart folder is considered valid (extracted contents are expected).
+
     Returns list of (Path, size) tuples.
     """
     manifest_files = folder.get("files")
@@ -328,7 +346,44 @@ def find_extra_files(folder: dict, base_path: Path) -> list:
     folder_path = base_path / folder["name"]
     expected_paths = {folder_path / f["path"] for f in manifest_files}
 
-    return find_unexpected_files_with_sizes(folder_path, expected_paths)
+    # Build a set of chart folders that have valid check.txt (synced archive charts)
+    # These folders should be entirely skipped during purge
+    valid_archive_folders = set()
+    for f in manifest_files:
+        file_path = f.get("path", "")
+        file_name = file_path.split("/")[-1].lower() if "/" in file_path else file_path.lower()
+        file_md5 = f.get("md5", "")
+
+        if is_archive_file(file_name) and file_md5:
+            # This is an archive file - check if it's been extracted
+            if "/" in file_path:
+                parent = "/".join(file_path.split("/")[:-1])
+                chart_folder = folder_path / parent
+                stored_md5 = read_checksum(chart_folder)
+                if stored_md5 == file_md5:
+                    # This archive has been extracted - mark folder as valid
+                    valid_archive_folders.add(chart_folder)
+
+    # Get all unexpected files
+    all_extras = find_unexpected_files_with_sizes(folder_path, expected_paths)
+
+    # Filter out files that are inside valid archive chart folders
+    filtered_extras = []
+    for file_path, size in all_extras:
+        # Check if this file is inside a valid archive folder
+        is_in_valid_archive = False
+        for valid_folder in valid_archive_folders:
+            try:
+                file_path.relative_to(valid_folder)
+                is_in_valid_archive = True
+                break
+            except ValueError:
+                continue
+
+        if not is_in_valid_archive:
+            filtered_extras.append((file_path, size))
+
+    return filtered_extras
 
 
 def delete_files(files: list, base_path: Path) -> int:
@@ -416,12 +471,12 @@ def count_purgeable_charts(folders: list, base_path: Path, user_settings=None) -
                             total_size += data["size"]
             continue
 
-        # Drive enabled - count charts in disabled charters
-        disabled_charters = user_settings.get_disabled_subfolders(folder_id) if user_settings else set()
-        if not disabled_charters or not manifest_files:
+        # Drive enabled - count charts in disabled setlists
+        disabled_setlists = user_settings.get_disabled_subfolders(folder_id) if user_settings else set()
+        if not disabled_setlists or not manifest_files:
             continue
 
-        chart_folders = defaultdict(lambda: {"has_marker": False, "size": 0, "charter": ""})
+        chart_folders = defaultdict(lambda: {"has_marker": False, "size": 0, "setlist": ""})
         for f in manifest_files:
             file_path = f.get("path", "")
             file_size = f.get("size", 0)
@@ -431,13 +486,13 @@ def count_purgeable_charts(folders: list, base_path: Path, user_settings=None) -
             if len(parts) < 2:
                 continue
 
-            charter = parts[0]
-            if charter not in disabled_charters:
+            setlist = parts[0]
+            if setlist not in disabled_setlists:
                 continue
 
             parent = "/".join(parts[:-1])
             chart_folders[parent]["size"] += file_size
-            chart_folders[parent]["charter"] = charter
+            chart_folders[parent]["setlist"] = setlist
             if file_name in CHART_MARKERS:
                 chart_folders[parent]["has_marker"] = True
             elif any(file_name.endswith(ext) for ext in CHART_ARCHIVE_EXTENSIONS):
@@ -467,7 +522,7 @@ def purge_all_folders(folders: list, base_path: Path, user_settings=None):
     This includes:
     - Files not in the manifest (extra files)
     - Files from disabled drives
-    - Files from disabled charters
+    - Files from disabled setlists
 
     Args:
         folders: List of folder dicts from manifest
@@ -508,24 +563,24 @@ def purge_all_folders(folders: list, base_path: Path, user_settings=None):
                 print(f"  Removed {deleted} files")
             continue
 
-        # Drive is enabled, check charter-level
+        # Drive is enabled, check setlist-level
         files_to_purge = []
 
-        # Get disabled charters
-        disabled_charters = user_settings.get_disabled_subfolders(folder_id) if user_settings else set()
+        # Get disabled setlists
+        disabled_setlists = user_settings.get_disabled_subfolders(folder_id) if user_settings else set()
 
-        # Find files in disabled charters
-        for charter_name in disabled_charters:
-            charter_path = folder_path / charter_name
-            if charter_path.exists():
-                for f in charter_path.rglob("*"):
+        # Find files in disabled setlists
+        for setlist_name in disabled_setlists:
+            setlist_path = folder_path / setlist_name
+            if setlist_path.exists():
+                for f in setlist_path.rglob("*"):
                     if f.is_file():
                         try:
                             files_to_purge.append((f, f.stat().st_size))
                         except Exception:
                             files_to_purge.append((f, 0))
 
-        # Also find extra files not in manifest (for enabled charters)
+        # Also find extra files not in manifest (for enabled setlists)
         extras = find_extra_files(folder, base_path)
         files_to_purge.extend(extras)
 
