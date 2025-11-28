@@ -2,21 +2,23 @@
 File downloader for DM Chart Sync.
 
 Handles parallel file downloads with progress tracking and retries.
+Uses asyncio + aiohttp for efficient concurrent downloads.
 """
 
+import asyncio
 import json
 import os
 import sys
 import shutil
+import signal
 import threading
 import time
 import zipfile
 from pathlib import Path
 from typing import Callable, Optional, Tuple, List
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
-import requests
+import aiohttp
 
 from ..constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS, VIDEO_EXTENSIONS
 from ..file_ops import file_exists_with_size
@@ -341,8 +343,9 @@ class DownloadTask:
 
 class FileDownloader:
     """
-    Parallel file downloader with progress tracking.
+    Async file downloader with progress tracking.
 
+    Uses asyncio + aiohttp for efficient concurrent downloads.
     Uses direct Google Drive download URLs. Can optionally use OAuth
     for files that require authentication.
     """
@@ -352,7 +355,7 @@ class FileDownloader:
 
     def __init__(
         self,
-        max_workers: int = 8,
+        max_workers: int = 48,
         max_retries: int = 3,
         timeout: Tuple[int, int] = (10, 60),
         chunk_size: int = 32768,
@@ -363,7 +366,7 @@ class FileDownloader:
         Initialize the downloader.
 
         Args:
-            max_workers: Number of parallel download threads
+            max_workers: Max concurrent downloads
             max_retries: Number of retry attempts per file
             timeout: Request timeout (connect, read)
             chunk_size: Download chunk size in bytes
@@ -372,130 +375,129 @@ class FileDownloader:
         """
         self.max_workers = max_workers
         self.max_retries = max_retries
-        self.timeout = timeout
+        self.timeout = aiohttp.ClientTimeout(connect=timeout[0], total=timeout[1] + timeout[0])
         self.chunk_size = chunk_size
         self.auth_token = auth_token
         self.delete_videos = delete_videos
-        self._print_lock = threading.Lock()
 
-    def _download_with_auth(self, task: DownloadTask) -> requests.Response:
-        """Download using Drive API with OAuth token."""
-        url = f"{self.API_DOWNLOAD_URL.format(file_id=task.file_id)}&acknowledgeAbuse=true"
-        headers = {"Authorization": f"Bearer {self.auth_token}"}
-        return requests.get(
-            url,
-            stream=True,
-            headers=headers,
-            timeout=self.timeout
-        )
-
-    def _download_public(self, task: DownloadTask) -> requests.Response:
-        """Download using public URL."""
-        url = self.DOWNLOAD_URL_TEMPLATE.format(file_id=task.file_id)
-        return requests.get(
-            url,
-            stream=True,
-            allow_redirects=True,
-            timeout=self.timeout
-        )
-
-    def download_file(self, task: DownloadTask) -> DownloadResult:
+    async def _download_file_async(
+        self,
+        session: aiohttp.ClientSession,
+        task: DownloadTask,
+        semaphore: asyncio.Semaphore,
+    ) -> DownloadResult:
         """
-        Download a single file with retries.
+        Download a single file with retries (async).
 
         Tries public URL first, falls back to OAuth if available.
-
-        Args:
-            task: DownloadTask with file info
-
-        Returns:
-            DownloadResult with success status and message
         """
-        for attempt in range(self.max_retries):
-            try:
-                # Try public download first
-                response = self._download_public(task)
-                response.raise_for_status()
-
-                # Check if we got HTML instead of the file (auth required)
-                content_type = response.headers.get("content-type", "")
-                if "text/html" in content_type:
-                    # Try authenticated download if we have a token
-                    if self.auth_token:
-                        response = self._download_with_auth(task)
+        async with semaphore:
+            for attempt in range(self.max_retries):
+                try:
+                    # Try public download first
+                    url = self.DOWNLOAD_URL_TEMPLATE.format(file_id=task.file_id)
+                    async with session.get(url, allow_redirects=True) as response:
                         response.raise_for_status()
-                    else:
-                        return DownloadResult(
-                            success=False,
-                            file_path=task.local_path,
-                            message=f"SKIP (auth required): {task.local_path.name}",
-                        )
 
-                # Create parent directories
-                task.local_path.parent.mkdir(parents=True, exist_ok=True)
+                        # Check if we got HTML instead of the file (auth required)
+                        content_type = response.headers.get("content-type", "")
+                        if "text/html" in content_type:
+                            if self.auth_token:
+                                # Try authenticated download
+                                api_url = f"{self.API_DOWNLOAD_URL.format(file_id=task.file_id)}&acknowledgeAbuse=true"
+                                headers = {"Authorization": f"Bearer {self.auth_token}"}
+                                async with session.get(api_url, headers=headers) as auth_response:
+                                    auth_response.raise_for_status()
+                                    return await self._write_response(auth_response, task)
+                            else:
+                                return DownloadResult(
+                                    success=False,
+                                    file_path=task.local_path,
+                                    message=f"SKIP (auth required): {task.local_path.name}",
+                                )
 
-                # Download file
-                downloaded_bytes = 0
-                with open(task.local_path, "wb") as f:
-                    for chunk in response.iter_content(chunk_size=self.chunk_size):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded_bytes += len(chunk)
+                        return await self._write_response(response, task)
 
-                return DownloadResult(
-                    success=True,
-                    file_path=task.local_path,
-                    message=f"OK: {task.local_path.name}",
-                    bytes_downloaded=downloaded_bytes,
-                )
-
-            except requests.exceptions.Timeout:
-                if attempt < self.max_retries - 1:
-                    continue
-                return DownloadResult(
-                    success=False,
-                    file_path=task.local_path,
-                    message=f"ERR (timeout): {task.local_path.name}",
-                )
-
-            except requests.exceptions.HTTPError as e:
-                if hasattr(e, 'response') and e.response.status_code == 403:
-                    # Try to get more detail from response
-                    detail = ""
-                    try:
-                        err_json = e.response.json()
-                        detail = err_json.get("error", {}).get("message", "")
-                    except Exception:
-                        pass
-                    msg = f"SKIP (access denied): {task.local_path.name}"
-                    if detail:
-                        msg += f" - {detail}"
+                except asyncio.TimeoutError:
+                    if attempt < self.max_retries - 1:
+                        await asyncio.sleep(0.5 * (attempt + 1))  # Backoff
+                        continue
                     return DownloadResult(
                         success=False,
                         file_path=task.local_path,
-                        message=msg,
+                        message=f"ERR (timeout): {task.local_path.name}",
                     )
-                if attempt < self.max_retries - 1:
-                    continue
-                return DownloadResult(
-                    success=False,
-                    file_path=task.local_path,
-                    message=f"ERR (HTTP): {task.local_path.name}",
-                )
 
-            except Exception as e:
-                if attempt < self.max_retries - 1:
-                    continue
-                return DownloadResult(
-                    success=False,
-                    file_path=task.local_path,
-                    message=f"ERR: {task.local_path.name} - {e}",
-                )
+                except aiohttp.ClientResponseError as e:
+                    if e.status == 403:
+                        return DownloadResult(
+                            success=False,
+                            file_path=task.local_path,
+                            message=f"SKIP (access denied): {task.local_path.name}",
+                        )
+                    if attempt < self.max_retries - 1:
+                        await asyncio.sleep(0.5 * (attempt + 1))
+                        continue
+                    return DownloadResult(
+                        success=False,
+                        file_path=task.local_path,
+                        message=f"ERR (HTTP {e.status}): {task.local_path.name}",
+                    )
+
+                except asyncio.CancelledError:
+                    # Propagate cancellation
+                    raise
+
+                except Exception as e:
+                    if attempt < self.max_retries - 1:
+                        await asyncio.sleep(0.5 * (attempt + 1))
+                        continue
+                    return DownloadResult(
+                        success=False,
+                        file_path=task.local_path,
+                        message=f"ERR: {task.local_path.name} - {e}",
+                    )
+
+            return DownloadResult(
+                success=False,
+                file_path=task.local_path,
+                message=f"ERR: {task.local_path.name} - failed after {self.max_retries} attempts",
+            )
+
+    async def _write_response(
+        self,
+        response: aiohttp.ClientResponse,
+        task: DownloadTask,
+    ) -> DownloadResult:
+        """Write response content to file."""
+        # Create parent directories
+        task.local_path.parent.mkdir(parents=True, exist_ok=True)
+
+        downloaded_bytes = 0
+
+        # For small files (<1MB), just read all at once
+        # For larger files, stream in chunks
+        content_length = response.content_length or 0
+
+        if content_length > 0 and content_length < 1024 * 1024:
+            # Small file - read all at once (faster for small files)
+            data = await response.read()
+            with open(task.local_path, "wb") as f:
+                f.write(data)
+            downloaded_bytes = len(data)
+        else:
+            # Larger file - stream to disk
+            with open(task.local_path, "wb") as f:
+                async for chunk in response.content.iter_chunked(self.chunk_size):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded_bytes += len(chunk)
 
         return DownloadResult(
-            success=False,
+            success=True,
             file_path=task.local_path,
-            message=f"ERR: {task.local_path.name} - failed after {self.max_retries} attempts",
+            message=f"OK: {task.local_path.name}",
+            bytes_downloaded=downloaded_bytes,
         )
 
     def process_archive(self, task: DownloadTask) -> Tuple[bool, str]:
@@ -535,6 +537,108 @@ class FileDownloader:
 
         return True, ""
 
+    async def _download_many_async(
+        self,
+        tasks: List[DownloadTask],
+        progress: Optional[FolderProgress],
+        progress_callback: Optional[Callable[[DownloadResult], None]],
+    ) -> Tuple[int, int, bool]:
+        """
+        Internal async implementation of download_many.
+
+        Returns:
+            Tuple of (downloaded_count, error_count, cancelled)
+        """
+        downloaded = 0
+        errors = 0
+        cancelled = False
+        loop = asyncio.get_event_loop()
+
+        semaphore = asyncio.Semaphore(self.max_workers)
+
+        # Create connector with generous connection pooling
+        # For many small files, we want lots of concurrent connections
+        connector = aiohttp.TCPConnector(
+            limit=self.max_workers * 2,  # Total connection pool
+            limit_per_host=self.max_workers,  # All to Google Drive
+            ttl_dns_cache=300,
+            keepalive_timeout=30,  # Reuse connections
+        )
+
+        async with aiohttp.ClientSession(timeout=self.timeout, connector=connector) as session:
+            # Create all download coroutines as tasks
+            pending = {
+                asyncio.create_task(
+                    self._download_file_async(session, task, semaphore),
+                    name=str(task.local_path)
+                ): task
+                for task in tasks
+            }
+
+            try:
+                while pending:
+                    # Check for cancellation
+                    if progress and progress.cancelled:
+                        cancelled = True
+                        for t in pending:
+                            t.cancel()
+                        break
+
+                    # Wait for the next task to complete
+                    done, _ = await asyncio.wait(
+                        pending.keys(),
+                        timeout=0.1,  # Short timeout to check cancellation
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
+
+                    for async_task in done:
+                        task = pending.pop(async_task)
+
+                        try:
+                            result = async_task.result()
+                        except asyncio.CancelledError:
+                            continue
+                        except Exception as e:
+                            errors += 1
+                            if progress:
+                                progress.file_completed(task.local_path)
+                            continue
+
+                        if result.success:
+                            # Process archive if needed (run in executor to not block)
+                            if task.is_archive:
+                                archive_success, archive_error = await loop.run_in_executor(
+                                    None, self.process_archive, task
+                                )
+                                if not archive_success:
+                                    errors += 1
+                                    if progress:
+                                        progress.file_completed(task.local_path)
+                                        progress.write(f"  ERR: {task.local_path.parent.name} - {archive_error}")
+                                    continue
+
+                            downloaded += 1
+                            if progress:
+                                completed_info = progress.file_completed(result.file_path)
+                                if completed_info:
+                                    folder_name, is_chart = completed_info
+                                    progress.print_folder_complete(folder_name, is_chart)
+                        else:
+                            errors += 1
+                            if progress:
+                                progress.file_completed(result.file_path)
+                                progress.write(f"  {result.message}")
+
+                        if progress_callback:
+                            progress_callback(result)
+
+            except asyncio.CancelledError:
+                cancelled = True
+                for t in pending:
+                    t.cancel()
+
+        return downloaded, errors, cancelled
+
     def download_many(
         self,
         tasks: List[DownloadTask],
@@ -542,12 +646,12 @@ class FileDownloader:
         show_progress: bool = True,
     ) -> Tuple[int, int, int, bool]:
         """
-        Download multiple files in parallel.
+        Download multiple files concurrently using asyncio.
 
         Args:
             tasks: List of DownloadTask objects
             progress_callback: Optional callback for each completed download
-            show_progress: Whether to show tqdm progress bar
+            show_progress: Whether to show progress
 
         Returns:
             Tuple of (downloaded_count, skipped_count, error_count, cancelled)
@@ -555,28 +659,20 @@ class FileDownloader:
         if not tasks:
             return 0, 0, 0, False
 
-        downloaded = 0
-        errors = 0
-        cancelled = False
-
         progress = None
         if show_progress:
             progress = FolderProgress(total_files=len(tasks), total_folders=0)
             progress.register_folders(tasks)
             print(f"  Downloading {len(tasks)} files across {progress.total_folders} charts...")
-            print(f"  (Press ESC to cancel)")
+            print(f"  (max {self.max_workers} concurrent downloads, press ESC to cancel)")
             print()
 
         # Set up Ctrl+C handler for cancellation
         original_handler = None
-        import signal
 
         def handle_cancel():
-            nonlocal cancelled
-            if not cancelled:
-                cancelled = True
-                if progress:
-                    progress.cancel()
+            if progress and not progress.cancelled:
+                progress.cancel()
                 print("\n  Cancelling downloads...")
 
         def handle_interrupt(signum, frame):
@@ -592,60 +688,14 @@ class FileDownloader:
         esc_monitor.start()
 
         try:
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                futures = {
-                    executor.submit(self.download_file, task): task
-                    for task in tasks
-                }
-
-                for future in as_completed(futures):
-                    # Check for cancellation
-                    if cancelled or (progress and progress.cancelled):
-                        # Cancel remaining futures
-                        for f in futures:
-                            f.cancel()
-                        break
-
-                    task = futures[future]
-                    try:
-                        result = future.result()
-
-                        if result.success:
-                            # Process archive if needed
-                            if task.is_archive:
-                                archive_success, archive_error = self.process_archive(task)
-                                if not archive_success:
-                                    errors += 1
-                                    if progress:
-                                        progress.file_completed(task.local_path)
-                                        progress.write(f"  ERR: {task.local_path.parent.name} - {archive_error}")
-                                    continue
-
-                            downloaded += 1
-                            if progress:
-                                completed_info = progress.file_completed(task.local_path)
-                                if completed_info:
-                                    folder_name, is_chart = completed_info
-                                    progress.print_folder_complete(folder_name, is_chart)
-                        else:
-                            errors += 1
-                            if progress:
-                                progress.file_completed(task.local_path)  # Still count it
-                                progress.write(f"  {result.message}")
-
-                        if progress_callback:
-                            progress_callback(result)
-
-                    except Exception as e:
-                        errors += 1
-                        if progress:
-                            progress.file_completed(task.local_path)
-                            progress.write(f"  ERR: {task.local_path.name} - {e}")
-
+            # Run the async download
+            downloaded, errors, cancelled = asyncio.run(
+                self._download_many_async(tasks, progress, progress_callback)
+            )
         except KeyboardInterrupt:
-            # Handle any remaining Ctrl+C during cleanup
             cancelled = True
-
+            downloaded = 0
+            errors = 0
         finally:
             # Stop ESC monitor
             esc_monitor.stop()
@@ -658,8 +708,8 @@ class FileDownloader:
 
             if progress:
                 progress.close()
-            if cancelled:
-                print(f"  Cancelled. Downloaded {downloaded} files ({progress.completed_charts if progress else 0} complete charts).")
+                if cancelled:
+                    print(f"  Cancelled. Downloaded {downloaded} files ({progress.completed_charts} complete charts).")
 
         return downloaded, 0, errors, cancelled
 
