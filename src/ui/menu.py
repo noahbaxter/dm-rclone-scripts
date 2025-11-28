@@ -14,7 +14,7 @@ from typing import Any
 
 from .keyboard import getch, KEY_UP, KEY_DOWN, KEY_ENTER, KEY_ESC, KEY_SPACE
 from .colors import Colors, rgb, lerp_color
-from .utils import clear_screen
+from ..utils import clear_screen
 
 
 # Global flag for resize detection

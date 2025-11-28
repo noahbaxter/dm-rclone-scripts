@@ -33,7 +33,7 @@ from src import (
     format_duration,
     print_progress,
 )
-from src.drive_client import DriveClientConfig
+from src.drive.client import DriveClientConfig
 from src.manifest import FolderEntry
 from src.charts import count_charts_in_files
 

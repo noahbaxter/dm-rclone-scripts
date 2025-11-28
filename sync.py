@@ -25,7 +25,7 @@ from src import (
     UserSettings,
     extract_subfolders_from_manifest,
 )
-from src.drive_client import DriveClientConfig
+from src.drive.client import DriveClientConfig
 
 # ============================================================================
 # Configuration

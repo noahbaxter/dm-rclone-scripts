@@ -7,6 +7,7 @@ Provides ESC-aware input functions for better UX.
 import sys
 import os
 import time
+from contextlib import contextmanager
 
 # Platform-specific imports
 if os.name == 'nt':
@@ -20,6 +21,21 @@ else:
 class CancelInput(Exception):
     """Raised when user cancels input with ESC."""
     pass
+
+
+@contextmanager
+def raw_terminal():
+    """Context manager for raw terminal mode (Unix only, no-op on Windows)."""
+    if os.name == 'nt':
+        yield None
+    else:
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            yield fd
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 # Special key constants
@@ -83,10 +99,7 @@ def getch(return_special_keys: bool = False) -> str:
         return ch.decode('utf-8', errors='ignore')
     else:
         # Unix/Mac
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        try:
-            tty.setraw(fd)
+        with raw_terminal() as fd:
             ch = sys.stdin.read(1)
 
             # Handle Enter
@@ -146,8 +159,6 @@ def getch(return_special_keys: bool = False) -> str:
                     fcntl.fcntl(fd, fcntl.F_SETFL, flags)
 
             return ch
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 def check_esc_pressed() -> bool:
@@ -162,17 +173,11 @@ def check_esc_pressed() -> bool:
             return ch == b'\x1b'
         return False
     else:
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        try:
-            tty.setraw(fd)
-            # Non-blocking check
+        with raw_terminal():
             if select.select([sys.stdin], [], [], 0)[0]:
                 ch = sys.stdin.read(1)
                 return ch == '\x1b'
             return False
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 def input_with_esc(prompt: str = "") -> str:
@@ -305,18 +310,12 @@ def wait_with_skip(seconds: float = 2.0):
                 return
             time.sleep(0.05)
     else:
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        try:
-            tty.setraw(fd)
+        with raw_terminal():
             end_time = time.time() + seconds
             while time.time() < end_time:
                 remaining = end_time - time.time()
                 if remaining <= 0:
                     break
-                # Check for input with timeout
                 if select.select([sys.stdin], [], [], min(0.05, remaining))[0]:
                     sys.stdin.read(1)  # Consume the keypress
                     return
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)

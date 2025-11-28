@@ -9,7 +9,7 @@ from typing import Callable, Optional, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
-from .drive_client import DriveClient
+from .client import DriveClient
 
 
 @dataclass

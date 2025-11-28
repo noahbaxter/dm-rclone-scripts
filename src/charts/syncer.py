@@ -16,9 +16,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
 from .base import Chart, ChartType, ChartState
+from ..sync.progress import ProgressTracker
 
 
-class ChartProgress:
+class ChartProgress(ProgressTracker):
     """
     Progress tracker for chart syncing.
 
@@ -26,22 +27,12 @@ class ChartProgress:
     """
 
     def __init__(self, total_charts: int):
+        super().__init__()
         self.total_charts = total_charts
         self.completed_charts = 0
         self.total_files = 0
         self.completed_files = 0
         self.start_time = time.time()
-        self.lock = threading.Lock()
-        self._closed = False
-        self._cancelled = False
-
-    @property
-    def cancelled(self) -> bool:
-        return self._cancelled
-
-    def cancel(self):
-        """Signal cancellation."""
-        self._cancelled = True
 
     def chart_started(self, chart: Chart):
         """Called when a chart starts downloading."""
@@ -78,16 +69,6 @@ class ChartProgress:
                 print(f"{core}  {type_str} {name}")
             else:
                 print(f"{core}  {name}")
-
-    def write(self, msg: str):
-        """Write a message."""
-        with self.lock:
-            print(msg)
-
-    def close(self):
-        """Close the progress tracker."""
-        with self.lock:
-            self._closed = True
 
 
 class ChartSyncer:

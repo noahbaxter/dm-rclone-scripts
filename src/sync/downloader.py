@@ -16,7 +16,9 @@ from dataclasses import dataclass
 
 import requests
 
-from .constants import CHART_MARKERS
+from ..constants import CHART_MARKERS
+from ..file_ops import file_exists_with_size
+from .progress import ProgressTracker
 
 # Platform-specific imports for ESC detection
 if os.name == 'nt':
@@ -76,7 +78,7 @@ class EscMonitor:
                     termios.tcsetattr(fd, termios.TCSADRAIN, self._old_settings)
 
 
-class FolderProgress:
+class FolderProgress(ProgressTracker):
     """
     Progress tracker that reports completed folders/charts.
 
@@ -85,26 +87,16 @@ class FolderProgress:
     """
 
     def __init__(self, total_files: int, total_folders: int):
+        super().__init__()
         self.total_files = total_files
         self.total_folders = total_folders
         self.total_charts = 0
         self.completed_files = 0
         self.completed_charts = 0
         self.start_time = time.time()
-        self.lock = threading.Lock()
-        self._closed = False
-        self._cancelled = False
 
         # Track files per folder: {folder_path: {expected: int, completed: int, is_chart: bool}}
         self.folder_progress = {}
-
-    @property
-    def cancelled(self) -> bool:
-        return self._cancelled
-
-    def cancel(self):
-        """Signal cancellation."""
-        self._cancelled = True
 
     def register_folders(self, tasks):
         """Register all folders and their expected file counts."""
@@ -174,18 +166,6 @@ class FolderProgress:
                 line = core
 
             print(line)
-
-    def write(self, msg: str):
-        """Write a message."""
-        with self.lock:
-            print(msg)
-
-    def close(self):
-        """Close the progress tracker."""
-        with self.lock:
-            if self._closed:
-                return
-            self._closed = True
 
 
 @dataclass
@@ -466,7 +446,7 @@ class FileDownloader:
             local_path = local_base / f["path"]
             file_size = f.get("size", 0)
 
-            if local_path.exists() and local_path.stat().st_size == file_size:
+            if file_exists_with_size(local_path, file_size):
                 skipped += 1
             else:
                 to_download.append(DownloadTask(

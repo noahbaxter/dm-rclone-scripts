@@ -6,10 +6,10 @@ Handles menu display, user input, and terminal operations.
 
 from pathlib import Path
 
-from .utils import format_size, clear_screen
+from ..utils import format_size, clear_screen
+from ..config import UserSettings, extract_subfolders_from_manifest
+from ..sync.operations import get_sync_status
 from .menu import Menu, MenuItem, MenuDivider, MenuResult
-from .config import UserSettings, extract_subfolders_from_manifest
-from .sync_ops import get_sync_status
 
 
 def show_main_menu(folders: list, user_settings: UserSettings = None, selected_index: int = 0, download_path: Path = None) -> tuple[str, str | int | None, int]:

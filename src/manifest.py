@@ -246,7 +246,7 @@ class Manifest:
             sort_by: Sort order - "charts", "size", or "name"
         """
         try:
-            from .colors import Colors
+            from .ui.colors import Colors
         except ImportError:
             from colors import Colors
 

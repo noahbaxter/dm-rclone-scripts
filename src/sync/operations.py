@@ -9,12 +9,12 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from .constants import CHART_MARKERS
+from ..constants import CHART_MARKERS
+from ..file_ops import find_unexpected_files_with_sizes
+from ..utils import format_size, format_duration, print_progress
+from ..drive import DriveClient, FolderScanner
+from ..ui.keyboard import wait_with_skip
 from .downloader import FileDownloader
-from .drive_client import DriveClient
-from .keyboard import wait_with_skip
-from .scanner import FolderScanner
-from .utils import format_size, format_duration, print_progress
 
 
 @dataclass
@@ -322,25 +322,9 @@ def find_extra_files(folder: dict, base_path: Path) -> list:
         return []
 
     folder_path = base_path / folder["name"]
-    if not folder_path.exists():
-        return []
-
-    # Build set of expected paths
     expected_paths = {folder_path / f["path"] for f in manifest_files}
 
-    # Find all local files
-    local_files = [f for f in folder_path.rglob("*") if f.is_file()]
-
-    # Find extras with sizes
-    extra_files = []
-    for f in local_files:
-        if f not in expected_paths:
-            try:
-                extra_files.append((f, f.stat().st_size))
-            except Exception:
-                extra_files.append((f, 0))
-
-    return extra_files
+    return find_unexpected_files_with_sizes(folder_path, expected_paths)
 
 
 def delete_files(files: list, base_path: Path) -> int:

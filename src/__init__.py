@@ -5,42 +5,47 @@ This package provides classes for syncing files from Google Drive using
 a pre-built manifest approach that eliminates API calls for end users.
 """
 
-from .drive_client import DriveClient
+# Core modules
 from .manifest import Manifest
-from .downloader import FileDownloader
-from .scanner import FolderScanner
-from .utils import format_size, format_duration, print_progress, clear_screen
-from .sync_ops import FolderSync, purge_all_folders, get_sync_status, SyncStatus
-from .menu import print_header
-from .ui import show_main_menu, show_subfolder_settings
 from .config import DrivesConfig, UserSettings, DriveConfig, extract_subfolders_from_manifest
-from .auth import OAuthManager
-from .changes import ChangeTracker
-from .colors import Colors
+from .utils import format_size, format_duration, print_progress, clear_screen
+
+# Drive module
+from .drive import DriveClient, FolderScanner, OAuthManager, ChangeTracker
+
+# Sync module
+from .sync import FileDownloader, FolderSync, purge_all_folders, get_sync_status, SyncStatus
+
+# UI module
+from .ui import print_header, show_main_menu, show_subfolder_settings, Colors
 
 __all__ = [
-    "DriveClient",
+    # Core
     "Manifest",
-    "FileDownloader",
-    "FolderScanner",
-    "format_size",
-    "format_duration",
-    "print_progress",
-    "FolderSync",
-    "purge_all_folders",
-    "clear_screen",
-    "print_header",
-    "show_main_menu",
-    "show_subfolder_settings",
     "DrivesConfig",
     "UserSettings",
     "DriveConfig",
     "extract_subfolders_from_manifest",
+    "format_size",
+    "format_duration",
+    "print_progress",
+    "clear_screen",
+    # Drive
+    "DriveClient",
+    "FolderScanner",
     "OAuthManager",
     "ChangeTracker",
-    "Colors",
+    # Sync
+    "FileDownloader",
+    "FolderSync",
+    "purge_all_folders",
     "get_sync_status",
     "SyncStatus",
+    # UI
+    "print_header",
+    "show_main_menu",
+    "show_subfolder_settings",
+    "Colors",
 ]
 
 __version__ = "2.0.0"

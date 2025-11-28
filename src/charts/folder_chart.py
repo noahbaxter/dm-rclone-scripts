@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import List
 
 from .base import Chart, ChartType, ChartFile, ChartState
+from ..file_ops import find_unexpected_files
 
 
 @dataclass
@@ -114,13 +115,8 @@ class FolderChart(Chart):
         Returns list of paths to files that exist locally
         but aren't in the chart's file list.
         """
-        if not self.local_path.exists():
-            return []
-
         expected_paths = {self.local_path / f.path for f in self.files}
-        local_files = [f for f in self.local_path.rglob("*") if f.is_file()]
-
-        return [f for f in local_files if f not in expected_paths]
+        return find_unexpected_files(self.local_path, expected_paths)
 
     @classmethod
     def from_manifest_data(cls, name: str, folder_id: str, local_base: Path,

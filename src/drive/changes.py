@@ -7,8 +7,8 @@ Uses Google Drive Changes API for incremental manifest updates.
 from typing import Optional, Set
 from dataclasses import dataclass
 
-from .drive_client import DriveClient
-from .manifest import Manifest, FolderEntry
+from .client import DriveClient
+from ..manifest import Manifest, FolderEntry
 
 
 @dataclass
