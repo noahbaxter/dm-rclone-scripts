@@ -45,6 +45,28 @@ def _get_oauth_credentials_from_env() -> Optional[dict]:
     }
 
 
+def _get_token_from_env() -> Optional[dict]:
+    """
+    Build token dict from environment variables (for CI/headless use).
+
+    Returns:
+        Token dict in Google's format, or None if not configured
+    """
+    client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID")
+    client_secret = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET")
+    refresh_token = os.environ.get("GOOGLE_OAUTH_REFRESH_TOKEN")
+
+    if not client_id or not client_secret or not refresh_token:
+        return None
+
+    return {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "refresh_token": refresh_token,
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
+
+
 class OAuthManager:
     """
     Manages OAuth 2.0 authentication for Google Drive.
@@ -76,13 +98,15 @@ class OAuthManager:
         self.token_path = token_path or base_path / "token.json"
         self._credentials: Optional[Credentials] = None
         self._env_credentials = _get_oauth_credentials_from_env()
+        self._env_token = _get_token_from_env()
 
     @staticmethod
     def _get_base_path() -> Path:
-        """Get base path for credential files."""
+        """Get base path for credential files (for local dev)."""
         if getattr(sys, "frozen", False):
             return Path(sys.executable).parent
-        return Path(__file__).parent.parent
+        # Look in repo root for local credential files
+        return Path(__file__).parent.parent.parent
 
     @property
     def is_available(self) -> bool:
@@ -92,7 +116,12 @@ class OAuthManager:
     @property
     def is_configured(self) -> bool:
         """Check if OAuth credentials are available (env vars or file)."""
-        return self._env_credentials is not None or self.credentials_path.exists()
+        # Configured if we have env token, env credentials, or credentials file
+        return (
+            self._env_token is not None or
+            self._env_credentials is not None or
+            self.credentials_path.exists()
+        )
 
     @property
     def has_token(self) -> bool:
@@ -102,6 +131,11 @@ class OAuthManager:
     def get_credentials(self) -> Optional[Credentials]:
         """
         Get or refresh OAuth credentials.
+
+        Priority:
+        1. Environment variables with refresh token (CI/headless)
+        2. Existing token.json file
+        3. Interactive OAuth flow (local dev)
 
         Returns:
             Credentials object or None if not available
@@ -114,8 +148,22 @@ class OAuthManager:
 
         creds = None
 
-        # Try to load existing token
-        if self.token_path.exists():
+        # First, try env vars with refresh token (for CI/headless)
+        if self._env_token:
+            try:
+                creds = Credentials.from_authorized_user_info(
+                    self._env_token,
+                    self.SCOPES
+                )
+                # Refresh immediately since we only have refresh_token, not access_token
+                if creds and creds.refresh_token:
+                    creds.refresh(Request())
+            except Exception as e:
+                print(f"Warning: Could not use env token: {e}")
+                creds = None
+
+        # Try to load existing token file
+        if not creds and self.token_path.exists():
             try:
                 creds = Credentials.from_authorized_user_file(
                     str(self.token_path),
@@ -131,7 +179,7 @@ class OAuthManager:
             except Exception:
                 creds = None
 
-        # Get new credentials if needed
+        # Get new credentials via interactive flow if needed (local dev only)
         if not creds or not creds.valid:
             try:
                 # Prefer env vars, fall back to file
@@ -150,8 +198,8 @@ class OAuthManager:
                 print(f"OAuth error: {e}")
                 return None
 
-        # Save token for next time
-        if creds:
+        # Save token for next time (only if not using env token)
+        if creds and not self._env_token:
             self._save_token(creds)
             self._credentials = creds
 
