@@ -17,7 +17,7 @@ from .drive import DriveClient, FolderScanner, OAuthManager, ChangeTracker
 from .sync import FileDownloader, FolderSync, purge_all_folders, get_sync_status, SyncStatus
 
 # UI module
-from .ui import print_header, show_main_menu, show_subfolder_settings, Colors, compute_main_menu_cache
+from .ui import print_header, show_main_menu, show_subfolder_settings, Colors, compute_main_menu_cache, show_confirmation
 
 __all__ = [
     # Core
@@ -47,6 +47,7 @@ __all__ = [
     "show_subfolder_settings",
     "Colors",
     "compute_main_menu_cache",
+    "show_confirmation",
 ]
 
 __version__ = "2.0.0"

@@ -10,7 +10,7 @@ from pathlib import Path
 from ..utils import format_size, clear_screen
 from ..config import UserSettings, DrivesConfig, extract_subfolders_from_manifest
 from ..sync.operations import get_sync_status, count_purgeable_charts, SyncStatus
-from .menu import Menu, MenuItem, MenuDivider, MenuGroupHeader, MenuResult
+from .menu import Menu, MenuItem, MenuDivider, MenuGroupHeader, MenuResult, print_header
 
 
 @dataclass
@@ -355,5 +355,28 @@ def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_
             changed = True
 
     return changed
+
+
+def show_confirmation(title: str, message: str = None) -> bool:
+    """
+    Show a Yes/No confirmation dialog.
+
+    Args:
+        title: The question to ask (e.g., "Are you sure you want to purge?")
+        message: Optional additional context shown as subtitle
+
+    Returns:
+        True if user confirmed (Yes), False otherwise (No or cancelled)
+    """
+    menu = Menu(title=title, subtitle=message or "")
+
+    menu.add_item(MenuItem("No", hotkey="N", value=False))
+    menu.add_item(MenuItem("Yes", hotkey="Y", value=True))
+
+    result = menu.run()
+    if result is None:
+        return False
+
+    return result.value
 
 

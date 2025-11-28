@@ -23,11 +23,14 @@ from src import (
     print_header,
     show_main_menu,
     show_subfolder_settings,
+    show_confirmation,
     UserSettings,
     DrivesConfig,
     extract_subfolders_from_manifest,
     compute_main_menu_cache,
+    format_size,
 )
+from src.sync.operations import count_purgeable_charts
 from src.drive.client import DriveClientConfig
 
 # ============================================================================
@@ -157,9 +160,27 @@ class SyncApp:
         disabled_map = self._get_disabled_subfolders_for_folders(enabled_indices)
         self.sync.download_folders(self.folders, enabled_indices, get_download_path(), disabled_map)
 
-    def handle_purge(self):
-        """Purge disabled/extra files from all folders."""
+    def handle_purge(self) -> bool:
+        """Purge disabled/extra files from all folders.
+
+        Returns:
+            True if purge was performed, False if cancelled or nothing to purge.
+        """
+        # Check what would be purged
+        purge_count, purge_size = count_purgeable_charts(
+            self.folders, get_download_path(), self.user_settings
+        )
+
+        if purge_count == 0:
+            return False
+
+        # Show confirmation
+        message = f"This will delete {purge_count} charts ({format_size(purge_size)})"
+        if not show_confirmation("Are you sure you want to purge?", message):
+            return False
+
         purge_all_folders(self.folders, get_download_path(), self.user_settings)
+        return True
 
     def handle_configure_drive(self, folder_id: str):
         """Configure setlists for a specific drive."""

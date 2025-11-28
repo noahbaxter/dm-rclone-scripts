@@ -37,7 +37,7 @@ from .menu import (
 
 def __getattr__(name):
     """Lazy import for screens module to avoid circular imports."""
-    if name in ("show_main_menu", "show_subfolder_settings", "compute_main_menu_cache"):
+    if name in ("show_main_menu", "show_subfolder_settings", "compute_main_menu_cache", "show_confirmation"):
         from . import screens
         return getattr(screens, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
@@ -76,4 +76,5 @@ __all__ = [
     "show_main_menu",
     "show_subfolder_settings",
     "compute_main_menu_cache",
+    "show_confirmation",
 ]
