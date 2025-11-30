@@ -461,10 +461,13 @@ class FileDownloader:
                     if attempt < self.max_retries - 1:
                         await asyncio.sleep(0.5 * (attempt + 1))
                         continue
+                    # 5xx errors are server-side and may succeed on retry
+                    is_server_error = 500 <= e.status < 600
                     return DownloadResult(
                         success=False,
                         file_path=task.local_path,
                         message=f"ERR (HTTP {e.status}): {task.local_path.name}",
+                        retryable=is_server_error,
                     )
 
                 except asyncio.CancelledError:
