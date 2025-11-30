@@ -11,13 +11,13 @@ from .config import DrivesConfig, UserSettings, DriveConfig, extract_subfolders_
 from .utils import format_size, format_duration, print_progress, clear_screen
 
 # Drive module
-from .drive import DriveClient, FolderScanner, OAuthManager, ChangeTracker
+from .drive import DriveClient, FolderScanner, OAuthManager, UserOAuthManager, ChangeTracker
 
 # Sync module
 from .sync import FileDownloader, FolderSync, purge_all_folders, get_sync_status, SyncStatus
 
 # UI module
-from .ui import print_header, show_main_menu, show_subfolder_settings, Colors, compute_main_menu_cache, show_confirmation
+from .ui import print_header, show_main_menu, show_subfolder_settings, Colors, compute_main_menu_cache, show_confirmation, show_oauth_prompt
 
 __all__ = [
     # Core
@@ -34,6 +34,7 @@ __all__ = [
     "DriveClient",
     "FolderScanner",
     "OAuthManager",
+    "UserOAuthManager",
     "ChangeTracker",
     # Sync
     "FileDownloader",
@@ -48,6 +49,7 @@ __all__ = [
     "Colors",
     "compute_main_menu_cache",
     "show_confirmation",
+    "show_oauth_prompt",
 ]
 
 __version__ = "2.0.0"

@@ -6,9 +6,10 @@ venv/
 # Downloads
 Sync Charts/
 
-# OAuth credentials (admin only, not for users)
+# OAuth credentials
 credentials.json
 token.json
+user_token.json
 .env
 
 # User config
@@ -22,6 +23,9 @@ manifest.json
 # IDE
 .vscode/
 .idea/
+
+# Claude worklog
+.claude/worklog.md
 
 # PyInstaller build artifacts
 build/

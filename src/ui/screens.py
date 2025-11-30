@@ -103,7 +103,8 @@ def show_main_menu(
     selected_index: int = 0,
     download_path: Path = None,
     drives_config: DrivesConfig = None,
-    cache: MainMenuCache = None
+    cache: MainMenuCache = None,
+    user_oauth=None
 ) -> tuple[str, str | int | None, int]:
     """
     Show main menu and get user selection.
@@ -115,6 +116,7 @@ def show_main_menu(
         download_path: Path to download folder for sync status calculation
         drives_config: Drive configuration with group information
         cache: Pre-computed stats cache (if None, will compute fresh)
+        user_oauth: UserOAuthManager instance for checking sign-in state
 
     Returns tuple of (action, value, menu_position):
         - ("quit", None, pos) - user wants to quit
@@ -123,6 +125,8 @@ def show_main_menu(
         - ("configure", folder_id, pos) - configure specific drive (enter on drive)
         - ("toggle", folder_id, pos) - toggle drive on/off (space on drive)
         - ("toggle_group", group_name, pos) - expand/collapse group
+        - ("signin", None, pos) - sign in to Google
+        - ("signout", None, pos) - sign out of Google
     """
     # Compute cache if not provided
     if cache is None:
@@ -214,6 +218,16 @@ def show_main_menu(
 
     # Show purge count from cache
     menu.add_item(MenuItem("Purge", hotkey="X", value=("purge", None), description=cache.purge_desc))
+
+    # Google sign-in/sign-out option
+    menu.add_item(MenuDivider())
+    if user_oauth and user_oauth.is_signed_in:
+        email = user_oauth.get_user_email()
+        label = f"Sign out ({email})" if email else "Sign out of Google"
+        menu.add_item(MenuItem(label, hotkey="G", value=("signout", None), description="Remove saved Google credentials"))
+    else:
+        menu.add_item(MenuItem("Sign in to Google", hotkey="G", value=("signin", None), description="Faster downloads with your own quota"))
+
     menu.add_item(MenuDivider())
     menu.add_item(MenuItem("Quit", hotkey="Q", value=("quit", None)))
 
@@ -378,5 +392,40 @@ def show_confirmation(title: str, message: str = None) -> bool:
         return False
 
     return result.value
+
+
+def show_oauth_prompt() -> bool:
+    """
+    Show first-run OAuth sign-in prompt.
+
+    Explains the benefit of signing in (faster downloads, own quota)
+    and lets user choose to sign in or skip.
+
+    Returns:
+        True if user wants to sign in, False to skip
+    """
+    from .keyboard import getch
+
+    clear_screen()
+    print_header()
+    print()
+    print("  Sign in to Google for faster downloads?")
+    print()
+    print("  Signing in gives you your own download quota,")
+    print("  which means fewer rate limits and faster syncs.")
+    print()
+    print("  Your Google account is only used to download files.")
+    print("  We never upload, modify, or access anything else.")
+    print()
+    print("  [Y] Sign in (recommended)")
+    print("  [N] Skip for now")
+    print()
+
+    while True:
+        key = getch().lower()
+        if key == "y":
+            return True
+        elif key == "n" or key == "\x1b":  # N or ESC
+            return False
 
 

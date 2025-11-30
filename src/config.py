@@ -145,6 +145,8 @@ class UserSettings:
         self.group_expanded: dict[str, bool] = {}
         # Whether to delete video files from extracted archive charts
         self.delete_videos: bool = True
+        # Whether user has been prompted to sign in to Google
+        self.oauth_prompted: bool = False
         # Track if this is a fresh settings file (no file existed)
         self._is_new: bool = False
 
@@ -162,6 +164,7 @@ class UserSettings:
                 settings.subfolder_toggles = data.get("subfolder_toggles", {})
                 settings.group_expanded = data.get("group_expanded", {})
                 settings.delete_videos = data.get("delete_videos", True)
+                settings.oauth_prompted = data.get("oauth_prompted", False)
             except (json.JSONDecodeError, IOError):
                 settings._is_new = True
         else:
@@ -176,6 +179,7 @@ class UserSettings:
             "subfolder_toggles": self.subfolder_toggles,
             "group_expanded": self.group_expanded,
             "delete_videos": self.delete_videos,
+            "oauth_prompted": self.oauth_prompted,
         }
         with open(self.path, "w") as f:
             json.dump(data, f, indent=2)

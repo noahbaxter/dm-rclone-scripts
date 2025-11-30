@@ -18,18 +18,21 @@ from src import (
     Manifest,
     FolderSync,
     OAuthManager,
+    UserOAuthManager,
     purge_all_folders,
     clear_screen,
     print_header,
     show_main_menu,
     show_subfolder_settings,
     show_confirmation,
+    show_oauth_prompt,
     UserSettings,
     DrivesConfig,
     extract_subfolders_from_manifest,
     compute_main_menu_cache,
     format_size,
 )
+from src.ui.keyboard import wait_with_skip
 from src.sync.operations import count_purgeable_charts
 from src.drive.client import DriveClientConfig
 
@@ -123,11 +126,19 @@ class SyncApp:
         self.user_settings = UserSettings.load(get_user_settings_path())
         self.drives_config = DrivesConfig.load(get_drives_config_path())
 
-        # Get OAuth token for authenticated downloads if available
+        # User OAuth for downloads (optional, reduces rate limiting)
+        self.user_oauth = UserOAuthManager()
+
+        # Get OAuth token for authenticated downloads
+        # Prefer user token (their quota), fall back to admin token if configured
         auth_token = None
-        auth = OAuthManager()
-        if auth.is_available and auth.is_configured:
-            auth_token = auth.get_token()
+        if self.user_oauth.is_signed_in:
+            auth_token = self.user_oauth.get_token()
+        else:
+            # Fall back to admin OAuth if configured (dev/testing only)
+            admin_auth = OAuthManager()
+            if admin_auth.is_available and admin_auth.is_configured:
+                auth_token = admin_auth.get_token()
 
         self.sync = FolderSync(
             self.client,
@@ -206,6 +217,45 @@ class SyncApp:
         self.user_settings.toggle_group_expanded(group_name)
         self.user_settings.save()
 
+    def handle_signin(self):
+        """Handle Google sign-in."""
+        print("\n  Opening browser for Google sign-in...")
+        print("  (If browser doesn't open, check your terminal)")
+        print()
+
+        if self.user_oauth.sign_in():
+            print("  Signed in successfully!")
+            # Recreate sync with new token
+            self._refresh_sync_token()
+        else:
+            print("  Sign-in cancelled or failed.")
+
+        wait_with_skip(2)
+
+    def handle_signout(self):
+        """Handle Google sign-out."""
+        self.user_oauth.sign_out()
+        # Recreate sync without user token (falls back to admin or anonymous)
+        self._refresh_sync_token()
+        print("\n  Signed out of Google.")
+        wait_with_skip(2)
+
+    def _refresh_sync_token(self):
+        """Recreate FolderSync with current auth token."""
+        auth_token = None
+        if self.user_oauth.is_signed_in:
+            auth_token = self.user_oauth.get_token()
+        else:
+            admin_auth = OAuthManager()
+            if admin_auth.is_available and admin_auth.is_configured:
+                auth_token = admin_auth.get_token()
+
+        self.sync = FolderSync(
+            self.client,
+            auth_token=auth_token,
+            delete_videos=self.user_settings.delete_videos
+        )
+
     def _get_folder_by_id(self, folder_id: str) -> dict | None:
         """Get folder dict by folder_id."""
         for folder in self.folders:
@@ -233,6 +283,17 @@ class SyncApp:
         """Main application loop."""
         clear_screen()
         print_header()
+
+        # First-run OAuth prompt (only shown once)
+        if not self.user_settings.oauth_prompted and self.user_oauth.is_available:
+            self.user_settings.oauth_prompted = True
+            self.user_settings.save()
+
+            if show_oauth_prompt():
+                self.handle_signin()
+                clear_screen()
+                print_header()
+
         self.load_manifest()
 
         selected_index = 0  # Track selected position for maintaining after actions
@@ -254,7 +315,8 @@ class SyncApp:
 
             action, value, menu_pos = show_main_menu(
                 self.folders, self.user_settings, selected_index,
-                get_download_path(), self.drives_config, cache=menu_cache
+                get_download_path(), self.drives_config, cache=menu_cache,
+                user_oauth=self.user_oauth
             )
             selected_index = menu_pos  # Always preserve menu position
 
@@ -285,6 +347,14 @@ class SyncApp:
                 # Enter/Space on a group - expand/collapse (NO cache invalidation!)
                 self.handle_toggle_group(value)
                 # Keep using the same cache - just showing/hiding items
+
+            elif action == "signin":
+                self.handle_signin()
+                # No cache invalidation needed - just auth state changed
+
+            elif action == "signout":
+                self.handle_signout()
+                # No cache invalidation needed - just auth state changed
 
 
 def main():
