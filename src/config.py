@@ -1,9 +1,9 @@
 """
 Configuration management for DM Chart Sync.
 
-Two config files:
-- drives.json: Admin-maintained list of available drives (top-level only)
-- user_settings.json: User preferences including which subfolders are enabled
+Config files:
+- drives.json: Admin-maintained list of available drives (bundled with app)
+- .dm-sync/settings.json: User preferences including which subfolders are enabled
 """
 
 import json
@@ -122,7 +122,7 @@ class DrivesConfig:
 
 class UserSettings:
     """
-    Manages user_settings.json - user preferences that persist across runs.
+    Manages .dm-sync/settings.json - user preferences that persist across runs.
 
     Stores:
     - Drive toggle states (which drives are enabled/disabled at the top level)

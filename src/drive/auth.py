@@ -143,20 +143,13 @@ class OAuthManager:
         self._credentials = None
 
 
-def _get_app_dir() -> Path:
-    """Get the directory where the app is located (for user-writable files)."""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).parent.parent.parent
-
-
 class UserOAuthManager:
     """
     OAuth manager for end-user authentication using embedded credentials.
 
     Unlike OAuthManager (for admin use), this class:
     - Uses embedded OAuth client credentials (no credentials.json needed)
-    - Stores user token separately at user_token.json
+    - Stores user token at .dm-sync/token.json
     - Provides explicit sign_in/sign_out methods
     - Designed for optional user authentication to reduce rate limits
     """
@@ -166,9 +159,12 @@ class UserOAuthManager:
         Initialize user OAuth manager.
 
         Args:
-            token_path: Path to save/load user token (default: user_token.json)
+            token_path: Path to save/load user token (default: .dm-sync/token.json)
         """
-        self.token_path = token_path or _get_app_dir() / "user_token.json"
+        if token_path is None:
+            from ..paths import get_token_path
+            token_path = get_token_path()
+        self.token_path = token_path
         self._credentials: Optional[Credentials] = None
 
     @property

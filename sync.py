@@ -31,6 +31,13 @@ from src import (
     extract_subfolders_from_manifest,
     compute_main_menu_cache,
     format_size,
+    # Paths
+    get_settings_path,
+    get_token_path,
+    get_manifest_path,
+    get_download_path,
+    get_drives_config_path,
+    migrate_legacy_files,
 )
 from src.ui.keyboard import wait_with_skip
 from src.sync.operations import count_purgeable_charts
@@ -42,42 +49,6 @@ from src.drive.client import DriveClientConfig
 
 API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 MANIFEST_URL = "https://github.com/noahbaxter/dm-rclone-scripts/releases/download/manifest/manifest.json"
-DOWNLOAD_FOLDER = "Sync Charts"  # Folder next to the app
-
-
-def get_app_dir() -> Path:
-    """Get the directory where the app is located (for user-writable files)."""
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
-    return Path(__file__).parent
-
-
-def get_bundle_dir() -> Path:
-    """Get the directory where bundled resources are located (PyInstaller)."""
-    if getattr(sys, "frozen", False):
-        # PyInstaller extracts bundled files to _MEIPASS temp directory
-        return Path(sys._MEIPASS)
-    return Path(__file__).parent
-
-
-def get_download_path() -> Path:
-    """Get the download directory path."""
-    return get_app_dir() / DOWNLOAD_FOLDER
-
-
-def get_manifest_path() -> Path:
-    """Get path to local manifest file."""
-    return get_app_dir() / "manifest.json"
-
-
-def get_user_settings_path() -> Path:
-    """Get path to user settings file."""
-    return get_app_dir() / "user_settings.json"
-
-
-def get_drives_config_path() -> Path:
-    """Get path to drives config file (bundled with app)."""
-    return get_bundle_dir() / "drives.json"
 
 
 def fetch_manifest(use_local: bool = False) -> dict:
@@ -123,11 +94,11 @@ class SyncApp:
         self.client = DriveClient(client_config)
 
         # Load user settings first (needed for sync options)
-        self.user_settings = UserSettings.load(get_user_settings_path())
+        self.user_settings = UserSettings.load(get_settings_path())
         self.drives_config = DrivesConfig.load(get_drives_config_path())
 
         # User OAuth for downloads (optional, reduces rate limiting)
-        self.user_oauth = UserOAuthManager()
+        self.user_oauth = UserOAuthManager(token_path=get_token_path())
 
         # Get OAuth token for authenticated downloads
         # Prefer user token (their quota), fall back to admin token if configured
@@ -368,6 +339,12 @@ def main():
         help="Use local manifest.json instead of fetching from GitHub"
     )
     args = parser.parse_args()
+
+    # Migrate legacy files from old locations to .dm-sync/
+    # Must run BEFORE creating SyncApp so paths resolve correctly
+    migrated = migrate_legacy_files()
+    if migrated:
+        print(f"Migrated settings to .dm-sync/: {', '.join(migrated)}")
 
     app = SyncApp(use_local_manifest=args.local_manifest)
     app.run()

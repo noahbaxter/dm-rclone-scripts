@@ -9,6 +9,18 @@ a pre-built manifest approach that eliminates API calls for end users.
 from .manifest import Manifest
 from .config import DrivesConfig, UserSettings, DriveConfig, extract_subfolders_from_manifest
 from .utils import format_size, format_duration, print_progress, clear_screen
+from .paths import (
+    get_app_dir,
+    get_bundle_dir,
+    get_data_dir,
+    get_settings_path,
+    get_token_path,
+    get_manifest_path,
+    get_local_manifest_path,
+    get_download_path,
+    get_drives_config_path,
+    migrate_legacy_files,
+)
 
 # Drive module
 from .drive import DriveClient, FolderScanner, OAuthManager, UserOAuthManager, ChangeTracker
@@ -30,6 +42,17 @@ __all__ = [
     "format_duration",
     "print_progress",
     "clear_screen",
+    # Paths
+    "get_app_dir",
+    "get_bundle_dir",
+    "get_data_dir",
+    "get_settings_path",
+    "get_token_path",
+    "get_manifest_path",
+    "get_local_manifest_path",
+    "get_download_path",
+    "get_drives_config_path",
+    "migrate_legacy_files",
     # Drive
     "DriveClient",
     "FolderScanner",

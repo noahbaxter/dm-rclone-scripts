@@ -27,6 +27,9 @@ manifest.json
 # Claude worklog
 .claude/worklog.md
 
+# App data (user settings, tokens, cached manifest)
+.dm-sync/
+
 # PyInstaller build artifacts
 build/
 dist/
