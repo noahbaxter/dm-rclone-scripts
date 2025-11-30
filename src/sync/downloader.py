@@ -24,6 +24,7 @@ import certifi
 
 from ..constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS, VIDEO_EXTENSIONS
 from ..file_ops import file_exists_with_size
+from ..utils import sanitize_path
 from .progress import ProgressTracker
 
 
@@ -769,7 +770,8 @@ class FileDownloader:
         skipped = 0
 
         for f in files:
-            file_path = f["path"]
+            # Sanitize path for Windows-illegal characters (*, ?, ", <, >, |, :)
+            file_path = sanitize_path(f["path"])
             file_name = file_path.split("/")[-1] if "/" in file_path else file_path
             file_size = f.get("size", 0)
             file_md5 = f.get("md5", "")
