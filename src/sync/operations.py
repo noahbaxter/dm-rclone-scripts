@@ -13,7 +13,7 @@ from pathlib import Path
 
 from ..constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS
 from ..file_ops import find_unexpected_files_with_sizes
-from ..utils import format_size, format_duration, print_progress
+from ..utils import format_size, format_duration, print_progress, sanitize_path
 from ..drive import DriveClient, FolderScanner
 from ..ui.keyboard import wait_with_skip
 from .downloader import FileDownloader, read_checksum, read_checksum_data, is_archive_file, get_folder_size
@@ -150,17 +150,20 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
             if slash_idx == -1:
                 continue  # Skip root-level files
 
-            parent = file_path[:slash_idx]
-            file_name = file_path[slash_idx + 1:].lower()
-
-            # Skip files in disabled setlists
+            # Skip files in disabled setlists (check before sanitizing)
             if disabled_setlists:
                 first_slash = file_path.find("/")
                 setlist = file_path[:first_slash] if first_slash != -1 else file_path
                 if setlist in disabled_setlists:
                     continue
 
-            chart_folders[parent]["files"].append((file_path, file_size))
+            # Sanitize path for cross-platform compatibility (must match download logic)
+            sanitized_path = sanitize_path(file_path)
+            sanitized_slash_idx = sanitized_path.rfind("/")
+            parent = sanitized_path[:sanitized_slash_idx]
+            file_name = sanitized_path[sanitized_slash_idx + 1:].lower()
+
+            chart_folders[parent]["files"].append((sanitized_path, file_size))
             chart_folders[parent]["total_size"] += file_size
 
             # Check for chart markers (song.ini, notes.mid, etc.)
@@ -553,8 +556,11 @@ def count_purgeable_charts(folders: list, base_path: Path, user_settings=None) -
                     if slash_idx == -1:
                         continue
 
-                    parent = file_path[:slash_idx]
-                    file_name = file_path[slash_idx + 1:].lower()
+                    # Sanitize path to match local file paths
+                    sanitized_path = sanitize_path(file_path)
+                    sanitized_slash_idx = sanitized_path.rfind("/")
+                    parent = sanitized_path[:sanitized_slash_idx]
+                    file_name = sanitized_path[sanitized_slash_idx + 1:].lower()
 
                     chart_folders[parent]["size"] += file_size
                     if file_name in CHART_MARKERS:
@@ -598,13 +604,16 @@ def count_purgeable_charts(folders: list, base_path: Path, user_settings=None) -
             if first_slash == -1:
                 continue
 
+            # Check setlist before sanitizing (setlist names shouldn't have illegal chars)
             setlist = file_path[:first_slash]
             if setlist not in disabled_setlists:
                 continue
 
-            slash_idx = file_path.rfind("/")
-            parent = file_path[:slash_idx]
-            file_name = file_path[slash_idx + 1:].lower()
+            # Sanitize path to match local file paths
+            sanitized_path = sanitize_path(file_path)
+            sanitized_slash_idx = sanitized_path.rfind("/")
+            parent = sanitized_path[:sanitized_slash_idx]
+            file_name = sanitized_path[sanitized_slash_idx + 1:].lower()
 
             chart_folders[parent]["size"] += file_size
             chart_folders[parent]["setlist"] = setlist
