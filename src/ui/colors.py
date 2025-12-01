@@ -15,6 +15,7 @@ class Colors:
     HOTKEY = "\x1b[38;2;167;139;250m"
     MUTED = "\x1b[38;2;148;163;184m"
     MUTED_DIM = "\x1b[38;2;90;100;110m"
+    RED = "\x1b[38;2;239;68;68m"  # For excess/purgeable content
 
 
 def rgb(r: int, g: int, b: int) -> str:
