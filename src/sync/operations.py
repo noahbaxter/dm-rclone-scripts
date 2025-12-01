@@ -19,6 +19,44 @@ from ..ui.keyboard import wait_with_skip
 from .downloader import FileDownloader, read_checksum, read_checksum_data, is_archive_file, get_folder_size
 
 
+# Filesystem scan cache - persists until download/purge invalidates it
+class _ScanCache:
+    """Cache for expensive filesystem scan operations."""
+
+    def __init__(self):
+        self.local_files: dict[str, dict[str, int]] = {}  # folder_path -> {rel_path: size}
+        self.checksums: dict[str, dict[str, dict]] = {}  # folder_path -> {parent: data}
+        self.actual_charts: dict[str, tuple[int, int]] = {}  # folder_path -> (count, size)
+
+    def clear(self):
+        """Clear all cached data (call after download/purge)."""
+        self.local_files.clear()
+        self.checksums.clear()
+        self.actual_charts.clear()
+
+    def clear_folder(self, folder_path: str):
+        """Clear cached data for a specific folder."""
+        self.local_files.pop(folder_path, None)
+        self.checksums.pop(folder_path, None)
+        # Clear actual_charts for this folder and all subfolders
+        to_remove = [k for k in self.actual_charts if k.startswith(folder_path)]
+        for k in to_remove:
+            self.actual_charts.pop(k, None)
+
+
+_scan_cache = _ScanCache()
+
+
+def clear_scan_cache():
+    """Clear the filesystem scan cache. Call after downloads or purges."""
+    _scan_cache.clear()
+
+
+def clear_folder_cache(folder_path: Path):
+    """Clear cache for a specific folder. Call after downloading to that folder."""
+    _scan_cache.clear_folder(str(folder_path))
+
+
 @dataclass
 class SyncStatus:
     """Status of local charts vs manifest."""
@@ -26,6 +64,9 @@ class SyncStatus:
     synced_charts: int = 0
     total_size: int = 0
     synced_size: int = 0
+    # True if counts are from actual folder scan (real charts)
+    # False if counts are from manifest (archives, not yet extracted)
+    is_actual_charts: bool = False
 
     @property
     def missing_charts(self) -> int:
@@ -45,7 +86,12 @@ def _scan_local_files(folder_path: Path) -> dict[str, int]:
     Scan local folder and return dict of {relative_path: size}.
 
     Uses os.scandir for better performance than individual exists()/stat() calls.
+    Results are cached until clear_scan_cache() is called.
     """
+    cache_key = str(folder_path)
+    if cache_key in _scan_cache.local_files:
+        return _scan_cache.local_files[cache_key]
+
     local_files = {}
     if not folder_path.exists():
         return local_files
@@ -66,7 +112,113 @@ def _scan_local_files(folder_path: Path) -> dict[str, int]:
             pass
 
     scan_dir(folder_path)
+    _scan_cache.local_files[cache_key] = local_files
     return local_files
+
+
+def _scan_actual_charts_uncached(folder_path: Path) -> tuple[int, int]:
+    """
+    Scan folder for actual chart folders (containing song.ini, notes.mid, etc).
+    Internal uncached version - use _scan_actual_charts() instead.
+
+    Returns:
+        Tuple of (chart_count, total_size_bytes)
+    """
+    if not folder_path.exists():
+        return 0, 0
+
+    chart_count = 0
+    total_size = 0
+    chart_markers = {"song.ini", "notes.mid", "notes.chart"}
+
+    def get_dir_size(dir_path: Path) -> int:
+        """Get total size of all files in directory."""
+        size = 0
+        try:
+            with os.scandir(dir_path) as entries:
+                for entry in entries:
+                    if entry.is_file(follow_symlinks=False):
+                        try:
+                            size += entry.stat(follow_symlinks=False).st_size
+                        except OSError:
+                            pass
+                    elif entry.is_dir(follow_symlinks=False):
+                        size += get_dir_size(Path(entry.path))
+        except OSError:
+            pass
+        return size
+
+    def scan_for_charts(dir_path: Path):
+        nonlocal chart_count, total_size
+        try:
+            has_marker = False
+            with os.scandir(dir_path) as entries:
+                subdirs = []
+                for entry in entries:
+                    if entry.is_file(follow_symlinks=False):
+                        if entry.name.lower() in chart_markers:
+                            has_marker = True
+                    elif entry.is_dir(follow_symlinks=False):
+                        subdirs.append(Path(entry.path))
+
+                if has_marker:
+                    # This folder is a chart
+                    chart_count += 1
+                    total_size += get_dir_size(dir_path)
+                else:
+                    # Not a chart, recurse into subdirs
+                    for subdir in subdirs:
+                        scan_for_charts(subdir)
+        except OSError:
+            pass
+
+    scan_for_charts(folder_path)
+    return chart_count, total_size
+
+
+def _scan_actual_charts(folder_path: Path, disabled_setlists: set[str] = None) -> tuple[int, int]:
+    """
+    Scan folder for actual chart folders (containing song.ini, notes.mid, etc).
+    Results are cached until clear_scan_cache() is called.
+
+    Args:
+        folder_path: Path to scan
+        disabled_setlists: Set of top-level subfolder names to skip
+
+    Returns:
+        Tuple of (chart_count, total_size_bytes)
+    """
+    cache_key = str(folder_path)
+
+    # Get or compute full scan (no filtering)
+    if cache_key in _scan_cache.actual_charts:
+        full_count, full_size = _scan_cache.actual_charts[cache_key]
+    else:
+        full_count, full_size = _scan_actual_charts_uncached(folder_path)
+        _scan_cache.actual_charts[cache_key] = (full_count, full_size)
+
+    # If no filtering needed, return full scan
+    if not disabled_setlists:
+        return full_count, full_size
+
+    # Subtract disabled setlists (each cached separately)
+    result_count = full_count
+    result_size = full_size
+
+    for setlist_name in disabled_setlists:
+        setlist_path = folder_path / setlist_name
+        setlist_key = str(setlist_path)
+
+        if setlist_key in _scan_cache.actual_charts:
+            setlist_count, setlist_size = _scan_cache.actual_charts[setlist_key]
+        else:
+            setlist_count, setlist_size = _scan_actual_charts_uncached(setlist_path)
+            _scan_cache.actual_charts[setlist_key] = (setlist_count, setlist_size)
+
+        result_count -= setlist_count
+        result_size -= setlist_size
+
+    return max(0, result_count), max(0, result_size)
 
 
 def _scan_checksums(folder_path: Path) -> dict[str, dict]:
@@ -74,7 +226,12 @@ def _scan_checksums(folder_path: Path) -> dict[str, dict]:
     Scan for all check.txt files and return dict of {parent_path: checksum_data}.
 
     Much faster than reading check.txt individually for each chart.
+    Results are cached until clear_scan_cache() is called.
     """
+    cache_key = str(folder_path)
+    if cache_key in _scan_cache.checksums:
+        return _scan_cache.checksums[cache_key]
+
     checksums = {}
     if not folder_path.exists():
         return checksums
@@ -101,6 +258,7 @@ def _scan_checksums(folder_path: Path) -> dict[str, dict]:
             pass
 
     scan_dir(folder_path)
+    _scan_cache.checksums[cache_key] = checksums
     return checksums
 
 
@@ -122,6 +280,7 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
         folder_id = folder.get("folder_id", "")
         folder_name = folder.get("name", "")
         folder_path = base_path / folder_name
+        is_custom = folder.get("is_custom", False)
 
         # Skip disabled drives
         if user_settings and not user_settings.is_drive_enabled(folder_id):
@@ -131,52 +290,115 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
         if not manifest_files:
             continue
 
-        # Get disabled setlists
+        # Get disabled setlists (needed for both custom and regular folders)
         disabled_setlists = set()
         if user_settings:
             disabled_setlists = user_settings.get_disabled_subfolders(folder_id)
 
+        # For custom folders, we need both:
+        # - Totals: disk size for downloaded setlists, manifest size for not-downloaded
+        # - Synced: disk size for downloaded setlists
+        synced_from_scan = None
+        downloaded_setlist_sizes = {}  # setlist_name -> actual disk size
+        if is_custom and folder_path.exists():
+            actual_charts, actual_size = _scan_actual_charts(folder_path, disabled_setlists)
+            if actual_charts > 0:
+                synced_from_scan = (actual_charts, actual_size)
+                status.is_actual_charts = True
+                # Track per-setlist disk sizes for downloaded setlists
+                try:
+                    for entry in os.scandir(folder_path):
+                        if entry.is_dir() and not entry.name.startswith('.'):
+                            setlist_name = entry.name
+                            if disabled_setlists and setlist_name in disabled_setlists:
+                                continue
+                            # Get actual size on disk for this setlist
+                            setlist_charts, setlist_size = _scan_actual_charts(Path(entry.path), set())
+                            if setlist_charts > 0:
+                                downloaded_setlist_sizes[setlist_name] = setlist_size
+                except OSError:
+                    pass
+
         # Group files by parent folder to identify charts
-        # chart_folders: {parent_path: {files: [...], is_chart: bool, total_size: int, archive_md5: str}}
-        chart_folders = defaultdict(lambda: {"files": [], "is_chart": False, "total_size": 0, "archive_md5": ""})
+        # chart_folders: {parent_path: {files: [...], is_chart: bool, total_size: int, archive_md5: str, archive_name: str, checksum_path: str}}
+        chart_folders = defaultdict(lambda: {"files": [], "is_chart": False, "total_size": 0, "archive_md5": "", "archive_name": "", "checksum_path": ""})
 
         for f in manifest_files:
             file_path = f.get("path", "")
             file_size = f.get("size", 0)
             file_md5 = f.get("md5", "")
 
-            # Split once, reuse
-            slash_idx = file_path.rfind("/")
-            if slash_idx == -1:
-                continue  # Skip root-level files
+            # Sanitize path for cross-platform compatibility (must match download logic)
+            sanitized_path = sanitize_path(file_path)
 
-            # Skip files in disabled setlists (check before sanitizing)
+            # Split path into parent folder and filename
+            slash_idx = sanitized_path.rfind("/")
+            if slash_idx == -1:
+                # Root-level file
+                file_name = sanitized_path.lower()
+                archive_name = sanitized_path  # Full filename for lookup
+
+                # Root-level archives are each treated as individual charts
+                if is_archive_file(file_name):
+                    # Use the archive path itself as the "parent" key (unique per archive)
+                    chart_folders[sanitized_path]["files"].append((sanitized_path, file_size))
+                    chart_folders[sanitized_path]["total_size"] += file_size
+                    chart_folders[sanitized_path]["is_chart"] = True
+                    chart_folders[sanitized_path]["archive_md5"] = file_md5
+                    chart_folders[sanitized_path]["archive_name"] = archive_name
+                    chart_folders[sanitized_path]["checksum_path"] = ""  # Root folder
+                # Skip other root-level files (non-archives)
+                continue
+
+            parent = sanitized_path[:slash_idx]
+            file_name = sanitized_path[slash_idx + 1:].lower()
+            archive_name = sanitized_path[slash_idx + 1:]  # Full filename for lookup
+
+            # Skip files in disabled setlists (only check if has subfolders)
             if disabled_setlists:
                 first_slash = file_path.find("/")
                 setlist = file_path[:first_slash] if first_slash != -1 else file_path
                 if setlist in disabled_setlists:
                     continue
 
-            # Sanitize path for cross-platform compatibility (must match download logic)
-            sanitized_path = sanitize_path(file_path)
-            sanitized_slash_idx = sanitized_path.rfind("/")
-            parent = sanitized_path[:sanitized_slash_idx]
-            file_name = sanitized_path[sanitized_slash_idx + 1:].lower()
+            # For custom folders with archives, each archive is a separate "chart"
+            # Use the full path as key so each archive counts separately
+            if is_custom and is_archive_file(file_name):
+                chart_folders[sanitized_path]["files"].append((sanitized_path, file_size))
+                chart_folders[sanitized_path]["total_size"] += file_size
+                chart_folders[sanitized_path]["is_chart"] = True
+                chart_folders[sanitized_path]["archive_md5"] = file_md5
+                chart_folders[sanitized_path]["archive_name"] = archive_name
+                chart_folders[sanitized_path]["checksum_path"] = parent
+            else:
+                chart_folders[parent]["files"].append((sanitized_path, file_size))
+                chart_folders[parent]["total_size"] += file_size
 
-            chart_folders[parent]["files"].append((sanitized_path, file_size))
-            chart_folders[parent]["total_size"] += file_size
-
-            # Check for chart markers (song.ini, notes.mid, etc.)
-            if file_name in CHART_MARKERS:
-                chart_folders[parent]["is_chart"] = True
-            # Check for archive files (.zip, .7z, .rar)
-            elif is_archive_file(file_name):
-                chart_folders[parent]["is_chart"] = True
-                chart_folders[parent]["archive_md5"] = file_md5
+                # Check for chart markers (song.ini, notes.mid, etc.)
+                if file_name in CHART_MARKERS:
+                    chart_folders[parent]["is_chart"] = True
+                # Check for archive files (.zip, .7z, .rar)
+                elif is_archive_file(file_name):
+                    chart_folders[parent]["is_chart"] = True
+                    chart_folders[parent]["archive_md5"] = file_md5
+                    chart_folders[parent]["archive_name"] = archive_name
+                    chart_folders[parent]["checksum_path"] = parent  # Same as parent for subfolders
 
         # Batch scan: get all local files and checksums upfront
         local_files = _scan_local_files(folder_path)
         checksums = _scan_checksums(folder_path)
+
+        # For custom folders, track manifest sizes per setlist so we can replace with disk sizes
+        setlist_manifest_sizes = {}  # setlist_name -> manifest size
+        if is_custom and downloaded_setlist_sizes:
+            # Build per-setlist manifest sizes
+            for parent, data in chart_folders.items():
+                if not data["is_chart"]:
+                    continue
+                # Extract setlist name from path (first component)
+                first_slash = parent.find("/")
+                setlist_name = parent[:first_slash] if first_slash != -1 else parent
+                setlist_manifest_sizes[setlist_name] = setlist_manifest_sizes.get(setlist_name, 0) + data["total_size"]
 
         # Count charts (folders with markers or archives)
         for parent, data in chart_folders.items():
@@ -184,15 +406,41 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
                 continue
 
             status.total_charts += 1
-            status.total_size += data["total_size"]
+
+            # For custom folders with downloaded data, we'll calculate total_size per-setlist below
+            if synced_from_scan is not None:
+                # Skip adding manifest size here - we'll use disk sizes for downloaded setlists
+                pass
+            else:
+                status.total_size += data["total_size"]
+
+            # For custom folders with scanned data, skip per-chart sync checking
+            # We'll use the scan results for synced counts instead
+            if synced_from_scan is not None:
+                continue
 
             # For archive charts, check if check.txt has matching MD5
             if data["archive_md5"]:
-                checksum_data = checksums.get(parent, {})
-                if checksum_data.get("md5") == data["archive_md5"]:
-                    status.synced_charts += 1
-                    # Use actual extracted size if available
+                checksum_path = data["checksum_path"]
+                archive_name = data["archive_name"]
+                checksum_data = checksums.get(checksum_path, {})
+
+                # Support both old and new check.txt formats
+                stored_md5 = None
+                extracted_size = 0
+
+                # New multi-archive format
+                if "archives" in checksum_data:
+                    archive_info = checksum_data["archives"].get(archive_name, {})
+                    stored_md5 = archive_info.get("md5")
+                    extracted_size = archive_info.get("size", 0)
+                # Old single-archive format
+                elif checksum_data.get("md5"):
+                    stored_md5 = checksum_data.get("md5")
                     extracted_size = checksum_data.get("size", 0)
+
+                if stored_md5 == data["archive_md5"]:
+                    status.synced_charts += 1
                     status.synced_size += extracted_size if extracted_size else data["total_size"]
                 continue
 
@@ -207,6 +455,24 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
             if all_synced:
                 status.synced_charts += 1
                 status.synced_size += data["total_size"]
+
+        # For custom folders, use scan results for synced counts
+        # Calculate total_size: disk size for downloaded setlists, manifest size for not-downloaded
+        if synced_from_scan is not None:
+            actual_charts, actual_size = synced_from_scan
+            status.synced_charts += actual_charts
+            status.synced_size += actual_size
+
+            # Calculate total_size per setlist:
+            # - Downloaded setlists: use actual disk size
+            # - Not downloaded setlists: use manifest archive size
+            for setlist_name, manifest_size in setlist_manifest_sizes.items():
+                if setlist_name in downloaded_setlist_sizes:
+                    # Downloaded - use disk size
+                    status.total_size += downloaded_setlist_sizes[setlist_name]
+                else:
+                    # Not downloaded - use manifest size
+                    status.total_size += manifest_size
 
     return status
 
@@ -545,7 +811,17 @@ def count_purgeable_charts(folders: list, base_path: Path, user_settings=None) -
         manifest_files = folder.get("files", [])
 
         if not drive_enabled:
-            # Count synced charts in disabled drive using manifest
+            # Drive is disabled - all downloaded content is purgeable
+            is_custom = folder.get("is_custom", False)
+
+            # For custom folders with extracted content, scan actual charts
+            if is_custom:
+                charts, size = _scan_actual_charts(folder_path)
+                total_charts += charts
+                total_size += size
+                continue
+
+            # For regular drives, use manifest-based detection
             if manifest_files:
                 chart_folders = defaultdict(lambda: {"has_marker": False, "size": 0})
                 for f in manifest_files:
@@ -592,7 +868,25 @@ def count_purgeable_charts(folders: list, base_path: Path, user_settings=None) -
 
         # Drive enabled - count charts in disabled setlists
         disabled_setlists = user_settings.get_disabled_subfolders(folder_id) if user_settings else set()
-        if not disabled_setlists or not manifest_files:
+        if not disabled_setlists:
+            continue
+
+        is_custom = folder.get("is_custom", False)
+
+        # For custom folders, scan local disabled setlist folders directly
+        # (manifest has archives, but local content is extracted)
+        if is_custom:
+            for setlist_name in disabled_setlists:
+                setlist_path = folder_path / setlist_name
+                if setlist_path.exists():
+                    # Scan for actual charts in this disabled setlist
+                    charts, size = _scan_actual_charts(setlist_path)
+                    total_charts += charts
+                    total_size += size
+            continue
+
+        # For regular drives, use manifest-based detection
+        if not manifest_files:
             continue
 
         chart_folders = defaultdict(lambda: {"has_marker": False, "size": 0, "setlist": ""})

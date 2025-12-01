@@ -21,13 +21,17 @@ from src import (
     UserOAuthManager,
     purge_all_folders,
     clear_screen,
+    set_terminal_size,
     print_header,
     show_main_menu,
     show_subfolder_settings,
     show_confirmation,
     show_oauth_prompt,
+    show_add_custom_folder,
     UserSettings,
     DrivesConfig,
+    CustomFolders,
+    Colors,
     extract_subfolders_from_manifest,
     compute_main_menu_cache,
     format_size,
@@ -35,12 +39,13 @@ from src import (
     get_settings_path,
     get_token_path,
     get_manifest_path,
+    get_local_manifest_path,
     get_download_path,
     get_drives_config_path,
     migrate_legacy_files,
 )
 from src.ui.keyboard import wait_with_skip
-from src.sync.operations import count_purgeable_charts
+from src.sync.operations import count_purgeable_charts, clear_scan_cache
 from src.drive.client import DriveClientConfig
 
 # ============================================================================
@@ -97,6 +102,9 @@ class SyncApp:
         self.user_settings = UserSettings.load(get_settings_path())
         self.drives_config = DrivesConfig.load(get_drives_config_path())
 
+        # Load custom folders
+        self.custom_folders = CustomFolders.load(get_local_manifest_path())
+
         # User OAuth for downloads (optional, reduces rate limiting)
         self.user_oauth = UserOAuthManager(token_path=get_token_path())
 
@@ -119,12 +127,13 @@ class SyncApp:
         self.folders = []
         self.use_local_manifest = use_local_manifest
 
-    def load_manifest(self):
-        """Load manifest folders."""
-        if self.use_local_manifest:
-            print("Loading local manifest...")
-        else:
-            print("Fetching folder list...")
+    def load_manifest(self, quiet: bool = False):
+        """Load manifest folders (includes custom folders)."""
+        if not quiet:
+            if self.use_local_manifest:
+                print("Loading local manifest...")
+            else:
+                print("Fetching folder list...")
         manifest_data = fetch_manifest(use_local=self.use_local_manifest)
 
         # Filter out hidden drives
@@ -133,6 +142,22 @@ class SyncApp:
             f for f in manifest_data.get("folders", [])
             if f.get("folder_id") not in hidden_ids
         ]
+
+        # Add custom folders to the folders list
+        for custom in self.custom_folders.folders:
+            # Create folder dict in same format as manifest folders
+            files = self.custom_folders.get_files(custom.folder_id)
+            folder_dict = {
+                "name": custom.name,
+                "folder_id": custom.folder_id,
+                "description": "Custom folder",
+                "file_count": len(files),
+                "total_size": sum(f.get("size", 0) for f in files),
+                "files": files,
+                "complete": True,
+                "is_custom": True,  # Mark as custom for special handling
+            }
+            self.folders.append(folder_dict)
 
     def handle_download(self, indices: list):
         """Handle folder download."""
@@ -146,9 +171,13 @@ class SyncApp:
             print("\nNo drives enabled. Enable at least one drive to download.")
             return
 
+        # Scan custom folders that need scanning (no files yet)
+        self._scan_custom_folders_if_needed(enabled_indices)
+
         # Get disabled subfolders for filtering
         disabled_map = self._get_disabled_subfolders_for_folders(enabled_indices)
         self.sync.download_folders(self.folders, enabled_indices, get_download_path(), disabled_map)
+        clear_scan_cache()  # Invalidate filesystem cache after download
 
     def handle_purge(self) -> bool:
         """Purge disabled/extra files from all folders.
@@ -164,19 +193,152 @@ class SyncApp:
         if purge_count == 0:
             return False
 
-        # Show confirmation
-        message = f"This will delete {purge_count} charts ({format_size(purge_size)})"
+        # Show confirmation with red warning
+        message = f"{Colors.RED}This will delete {purge_count} charts ({format_size(purge_size)}){Colors.RESET}"
         if not show_confirmation("Are you sure you want to purge?", message):
             return False
 
         purge_all_folders(self.folders, get_download_path(), self.user_settings)
+        clear_scan_cache()  # Invalidate filesystem cache after purge
         return True
 
     def handle_configure_drive(self, folder_id: str):
-        """Configure setlists for a specific drive."""
+        """Configure setlists for a specific drive, or show options for custom folders."""
         folder = self._get_folder_by_id(folder_id)
-        if folder:
+        if not folder:
+            return
+
+        # Show subfolder settings (works for both regular and custom folders)
+        result = show_subfolder_settings(folder, self.user_settings, get_download_path())
+
+        # Handle custom folder actions
+        if result == "scan":
+            self._scan_single_custom_folder(folder)
+        elif result == "remove":
+            self._remove_custom_folder(folder.get("folder_id"), folder.get("name"))
+
+    def _show_custom_folder_options(self, folder: dict):
+        """Show options menu for a custom folder."""
+        from src.ui import Menu, MenuItem, MenuDivider
+        from src.config import extract_subfolders_from_manifest
+
+        folder_id = folder.get("folder_id")
+        folder_name = folder.get("name")
+        has_files = bool(folder.get("files"))
+
+        # Check if folder has setlists (subfolders)
+        setlists = extract_subfolders_from_manifest(folder) if has_files else []
+
+        menu = Menu(title=folder_name)
+
+        # Setlist settings (if folder has subfolders)
+        if setlists:
+            enabled_count = sum(
+                1 for s in setlists
+                if self.user_settings.is_subfolder_enabled(folder_id, s)
+            )
+            menu.add_item(MenuItem(
+                "Configure setlists",
+                hotkey="C",
+                value="setlists",
+                description=f"{enabled_count}/{len(setlists)} enabled"
+            ))
+            menu.add_item(MenuDivider())
+
+        # Scan option
+        if has_files:
+            menu.add_item(MenuItem("Re-scan folder", hotkey="S", value="scan", description="Refresh file list from Google Drive"))
+        else:
+            menu.add_item(MenuItem("Scan folder", hotkey="S", value="scan", description="Get file list from Google Drive"))
+
+        menu.add_item(MenuDivider())
+        menu.add_item(MenuItem("Remove folder", hotkey="R", value="remove", description="Remove from custom folders"))
+        menu.add_item(MenuDivider())
+        menu.add_item(MenuItem("Back", value="back"))
+
+        result = menu.run()
+        if not result or result.value == "back":
+            return
+
+        if result.value == "setlists":
             show_subfolder_settings(folder, self.user_settings, get_download_path())
+        elif result.value == "scan":
+            self._scan_single_custom_folder(folder)
+        elif result.value == "remove":
+            self._remove_custom_folder(folder_id, folder_name)
+
+    def _scan_single_custom_folder(self, folder: dict):
+        """Scan a single custom folder."""
+        from src.drive import FolderScanner
+
+        if not self.user_oauth.is_signed_in:
+            print("\n  Please sign in to Google first to scan custom folders.")
+            wait_with_skip(3)
+            return
+
+        folder_id = folder.get("folder_id")
+        folder_name = folder.get("name")
+
+        print()
+        print("=" * 50)
+        print(f"Scanning: {folder_name}")
+        print("=" * 50)
+
+        auth_token = self.user_oauth.get_token()
+        client_config = DriveClientConfig(api_key=API_KEY)
+        auth_client = DriveClient(client_config, auth_token=auth_token)
+        scanner = FolderScanner(auth_client)
+
+        def progress_cb(folders_scanned, files_found, shortcuts_found, files_list=None):
+            print(f"\r  Scanning... {folders_scanned} folders, {files_found} files found", end="", flush=True)
+
+        result = scanner.scan(folder_id, progress_callback=progress_cb)
+        print()
+
+        if result.cancelled:
+            print("  Scan cancelled.")
+            wait_with_skip(2)
+            return
+
+        # Update folder dict with scan results
+        folder["files"] = [
+            {
+                "id": f["id"],
+                "path": f["path"],
+                "name": f["name"],
+                "size": f.get("size", 0),
+                "md5": f.get("md5", ""),
+                "modified": f.get("modified", ""),
+            }
+            for f in result.files
+        ]
+        folder["file_count"] = len(result.files)
+        folder["total_size"] = sum(f.get("size", 0) for f in result.files)
+
+        # Save to custom folders storage
+        self.custom_folders.set_files(folder_id, folder["files"])
+        self.custom_folders.save()
+
+        print(f"  Done! Found {len(result.files)} files ({format_size(folder['total_size'])})")
+        print()
+        wait_with_skip(2)
+
+    def _remove_custom_folder(self, folder_id: str, folder_name: str):
+        """Remove a custom folder after confirmation."""
+        if not show_confirmation(
+            "Remove custom folder?",
+            f"This will remove '{folder_name}' from your custom folders.\nDownloaded files will NOT be deleted."
+        ):
+            return
+
+        self.custom_folders.remove_folder(folder_id)
+        self.custom_folders.save()
+
+        # Remove from folders list
+        self.folders = [f for f in self.folders if f.get("folder_id") != folder_id]
+
+        print(f"\n  Removed: {folder_name}")
+        wait_with_skip(2)
 
     def handle_toggle_drive(self, folder_id: str):
         """Toggle a drive on/off at the top level (preserves setlist settings)."""
@@ -211,6 +373,68 @@ class SyncApp:
         print("\n  Signed out of Google.")
         wait_with_skip(2)
 
+    def handle_add_custom_folder(self) -> bool:
+        """
+        Handle adding a custom Google Drive folder.
+
+        Returns True if a folder was added successfully.
+        """
+        # Require sign-in for custom folders (need OAuth to access user's Drive)
+        if not self.user_oauth.is_signed_in:
+            print("\n  Please sign in to Google first to add custom folders.")
+            print("  Custom folders require access to your Google Drive.")
+            wait_with_skip(3)
+            return False
+
+        # Create a client with user's OAuth token for validation
+        auth_token = self.user_oauth.get_token()
+        client_config = DriveClientConfig(api_key=API_KEY)
+        auth_client = DriveClient(client_config, auth_token=auth_token)
+
+        # Show add folder screen
+        folder_id, folder_name = show_add_custom_folder(auth_client, self.user_oauth)
+
+        if not folder_id:
+            return False
+
+        # Check if already exists
+        if self.custom_folders.has_folder(folder_id):
+            print(f"\n  Folder already added: {folder_name}")
+            wait_with_skip(2)
+            return False
+
+        # Add to custom folders
+        is_first_custom = len(self.custom_folders.folders) == 0
+        self.custom_folders.add_folder(folder_id, folder_name)
+        self.custom_folders.save()
+
+        # Enable the drive by default
+        self.user_settings.set_drive_enabled(folder_id, True)
+        # Expand Custom group when first custom folder is added
+        if is_first_custom:
+            self.user_settings.group_expanded["Custom"] = True
+        self.user_settings.save()
+
+        print(f"\n  Added: {folder_name}")
+
+        # Offer to scan now
+        if show_confirmation("Scan folder now?", "Scanning finds all files and setlists in the folder."):
+            # Create folder dict for scanning
+            folder_dict = {
+                "name": folder_name,
+                "folder_id": folder_id,
+                "files": [],
+                "is_custom": True,
+            }
+            self._scan_single_custom_folder(folder_dict)
+            # Reload manifest to pick up scanned files
+            self.load_manifest()
+        else:
+            print("  You can scan later from the folder options.")
+            wait_with_skip(2)
+
+        return True
+
     def _refresh_sync_token(self):
         """Recreate FolderSync with current auth token."""
         auth_token = None
@@ -233,6 +457,106 @@ class SyncApp:
             if folder.get("folder_id", "") == folder_id:
                 return folder
         return None
+
+    def _scan_custom_folders_if_needed(self, enabled_indices: list):
+        """
+        Scan any custom folders that haven't been scanned yet.
+
+        Custom folders need to be scanned using the user's OAuth token
+        before they can be downloaded.
+        """
+        from src.drive import FolderScanner
+
+        # Find custom folders that need scanning
+        folders_to_scan = []
+        for idx in enabled_indices:
+            folder = self.folders[idx]
+            if folder.get("is_custom") and not folder.get("files"):
+                folders_to_scan.append((idx, folder))
+
+        if not folders_to_scan:
+            return
+
+        # Need user OAuth for scanning
+        if not self.user_oauth.is_signed_in:
+            print("\n  Cannot scan custom folders: not signed in to Google.")
+            print("  Sign in first to download from custom folders.")
+            wait_with_skip(3)
+            return
+
+        # Show scanning header
+        print()
+        print("=" * 50)
+        print("Scanning custom folders...")
+        print("=" * 50)
+
+        # Create scanner with user's OAuth
+        auth_token = self.user_oauth.get_token()
+        client_config = DriveClientConfig(api_key=API_KEY)
+        auth_client = DriveClient(client_config, auth_token=auth_token)
+        scanner = FolderScanner(auth_client)
+
+        for idx, folder in folders_to_scan:
+            folder_id = folder.get("folder_id")
+            folder_name = folder.get("name")
+
+            print(f"\n[{folder_name}]")
+            print("-" * 40)
+
+            def progress_cb(folders_scanned, files_found, shortcuts_found, files_list=None):
+                print(f"\r  Scanning... {folders_scanned} folders, {files_found} files found", end="", flush=True)
+
+            result = scanner.scan(folder_id, progress_callback=progress_cb)
+            print()  # New line after progress
+
+            if result.cancelled:
+                print("  Scan cancelled.")
+                continue
+
+            # Update folder dict with scan results
+            folder["files"] = [
+                {
+                    "id": f["id"],
+                    "path": f["path"],
+                    "name": f["name"],
+                    "size": f.get("size", 0),
+                    "md5": f.get("md5", ""),
+                    "modified": f.get("modified", ""),
+                }
+                for f in result.files
+            ]
+            folder["file_count"] = len(result.files)
+            folder["total_size"] = sum(f.get("size", 0) for f in result.files)
+
+            # Save to custom folders storage
+            self.custom_folders.set_files(folder_id, folder["files"])
+            self.custom_folders.save()
+
+            print(f"  Done! Found {len(result.files)} files ({format_size(folder['total_size'])})")
+
+        print()
+        print("=" * 50)
+        print("Scan complete. Starting download...")
+        print("=" * 50)
+
+    def _get_combined_drives_config(self) -> DrivesConfig:
+        """Get drives config with custom folders added as a group."""
+        from src.config import DriveConfig
+
+        # Create a copy of drives list with custom folders appended
+        combined = DrivesConfig(self.drives_config.path)
+        combined.drives = list(self.drives_config.drives)
+
+        # Add custom folders as a group
+        for custom in self.custom_folders.folders:
+            combined.drives.append(DriveConfig(
+                name=custom.name,
+                folder_id=custom.folder_id,
+                description="Custom folder",
+                group="Custom",
+            ))
+
+        return combined
 
     def _get_disabled_subfolders_for_folders(self, indices: list) -> dict[str, list[str]]:
         """
@@ -278,15 +602,18 @@ class SyncApp:
                 print()
 
             # Compute cache if needed (first run or after state-changing actions)
+            # Use combined drives config that includes custom folders
+            combined_drives = self._get_combined_drives_config()
+
             if menu_cache is None:
                 menu_cache = compute_main_menu_cache(
                     self.folders, self.user_settings,
-                    get_download_path(), self.drives_config
+                    get_download_path(), combined_drives
                 )
 
             action, value, menu_pos = show_main_menu(
                 self.folders, self.user_settings, selected_index,
-                get_download_path(), self.drives_config, cache=menu_cache,
+                get_download_path(), combined_drives, cache=menu_cache,
                 user_oauth=self.user_oauth
             )
             selected_index = menu_pos  # Always preserve menu position
@@ -327,9 +654,18 @@ class SyncApp:
                 self.handle_signout()
                 # No cache invalidation needed - just auth state changed
 
+            elif action == "add_custom":
+                if self.handle_add_custom_folder():
+                    # Reload folders to include the new custom folder
+                    self.load_manifest(quiet=True)
+                    menu_cache = None  # Invalidate cache - new folder added
+
 
 def main():
     """Entry point."""
+    # Set terminal to consistent size for proper rendering
+    set_terminal_size(90, 40)
+
     parser = argparse.ArgumentParser(
         description="DM Chart Sync - Download charts from Google Drive"
     )

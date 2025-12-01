@@ -9,8 +9,126 @@ from pathlib import Path
 
 from ..utils import format_size, clear_screen
 from ..config import UserSettings, DrivesConfig, extract_subfolders_from_manifest
-from ..sync.operations import get_sync_status, count_purgeable_charts, SyncStatus
+from ..sync.operations import get_sync_status, count_purgeable_charts, SyncStatus, _scan_actual_charts
 from .menu import Menu, MenuItem, MenuDivider, MenuGroupHeader, MenuResult, print_header
+from .colors import Colors
+
+
+def format_colored_count(
+    synced: int,
+    total: int,
+    excess: int = 0,
+    synced_is_excess: bool = False
+) -> str:
+    """
+    Format a colored count display.
+
+    Args:
+        synced: Number of synced items
+        total: Total number of items
+        excess: Number of excess items (shown in red prefix)
+        synced_is_excess: If True, show synced in red (for disabled items with content)
+
+    Returns:
+        Formatted string like "20 + 108/108" with colors (caller adds unit if needed)
+        Or just "45" in red if total is 0 but excess > 0
+    """
+    m = Colors.MUTED
+
+    if excess > 0:
+        if total == 0:
+            # Everything is purgeable, just show excess in red
+            return f"{Colors.RED}{excess}"
+        return f"{Colors.RED}{excess}{m} + {Colors.RESET}{synced}{m}/{total}"
+    elif synced_is_excess and synced > 0:
+        return f"{Colors.RED}{synced}{m}/{total}"
+    elif synced > 0:
+        return f"{Colors.RESET}{synced}{m}/{total}"
+    else:
+        return f"{synced}/{total}"
+
+
+def format_colored_size(
+    synced_size: int,
+    total_size: int,
+    excess_size: int = 0,
+    synced_is_excess: bool = False
+) -> str:
+    """
+    Format a colored size display.
+
+    Args:
+        synced_size: Size of synced data
+        total_size: Total size
+        excess_size: Size of excess data (shown in red prefix)
+        synced_is_excess: If True, show synced_size in red (for disabled items with content)
+
+    Returns:
+        Formatted string like "1.6 GB + 4.2 GB/4.2 GB" with colors
+        Or just "1.5 GB" in red if total_size is 0 but excess_size > 0
+    """
+    m = Colors.MUTED
+
+    if excess_size > 0:
+        if total_size == 0:
+            # Everything is purgeable, just show excess in red
+            return f"{Colors.RED}{format_size(excess_size)}"
+        return f"{Colors.RED}{format_size(excess_size)}{m} + {Colors.RESET}{format_size(synced_size)}{m}/{format_size(total_size)}"
+    elif synced_is_excess and synced_size > 0:
+        return f"{Colors.RED}{format_size(synced_size)}{m}/{format_size(total_size)}"
+    elif synced_size > 0:
+        return f"{Colors.RESET}{format_size(synced_size)}{m}/{format_size(total_size)}"
+    else:
+        return format_size(total_size)
+
+
+def format_sync_subtitle(
+    status: SyncStatus,
+    unit: str = "charts",
+    excess_charts: int = 0,
+    excess_size: int = 0
+) -> str:
+    """
+    Format a sync status subtitle line.
+
+    Args:
+        status: SyncStatus with chart/archive counts
+        unit: "charts" or "archives"
+        excess_charts: Number of excess charts (purgeable, shown in red)
+        excess_size: Size of excess data (purgeable, shown in red)
+
+    Returns:
+        Formatted string like "Synced: 20 + 108/108 charts (1.6 GB + 4.2 GB/4.2 GB) | 100%"
+        Or if everything is purgeable: "Purgeable: 45 charts (1.5 GB)"
+    """
+    # If no enabled content but have excess, show purgeable-only format
+    if status.total_charts == 0:
+        if excess_charts > 0:
+            return f"Purgeable: {Colors.RED}{excess_charts}{Colors.MUTED} {unit} ({Colors.RED}{format_size(excess_size)}{Colors.MUTED})"
+        return ""
+
+    pct = (status.synced_charts / status.total_charts * 100)
+    charts_str = format_colored_count(status.synced_charts, status.total_charts, excess=excess_charts)
+    size_str = format_colored_size(status.synced_size, status.total_size, excess_size=excess_size)
+
+    return f"Synced: {charts_str} {unit} ({size_str}) | {pct:.0f}%"
+
+
+def _get_folder_size(folder_path: Path) -> int:
+    """Get total size of all files in a folder recursively."""
+    if not folder_path.exists():
+        return 0
+    total = 0
+    try:
+        for item in folder_path.rglob("*"):
+            if item.is_file():
+                try:
+                    total += item.stat().st_size
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return total
 
 
 @dataclass
@@ -44,32 +162,52 @@ def compute_main_menu_cache(
         return cache
 
     # Calculate global sync status for subtitle
-    raw_status = get_sync_status(folders, download_path, user_settings=None)
     enabled_status = get_sync_status(folders, download_path, user_settings)
 
-    pct = (enabled_status.synced_charts / enabled_status.total_charts * 100) if enabled_status.total_charts > 0 else 0
-    cache.subtitle = (
-        f"Downloaded: {raw_status.synced_charts:,} charts ({format_size(raw_status.synced_size)}) | "
-        f"Syncing: {enabled_status.total_charts:,} charts ({format_size(enabled_status.total_size)}) | "
-        f"{pct:.0f}% synced"
+    # Calculate purge/excess count (charts from disabled drives/setlists)
+    purge_count, purge_size = count_purgeable_charts(folders, download_path, user_settings)
+
+    # Format subtitle with excess shown in red
+    cache.subtitle = format_sync_subtitle(
+        enabled_status,
+        unit="charts",
+        excess_charts=purge_count,
+        excess_size=purge_size
     )
 
-    # Calculate purge count
-    purge_count, purge_size = count_purgeable_charts(folders, download_path, user_settings)
     if purge_count > 0:
-        cache.purge_desc = f"{purge_count} charts, {format_size(purge_size)}"
+        cache.purge_desc = f"{Colors.RED}{purge_count} charts, {format_size(purge_size)}{Colors.MUTED}"
 
     # Calculate per-folder stats
     for folder in folders:
         folder_id = folder.get("folder_id", "")
+        folder_name = folder.get("name", "")
         stats_parts = []
 
-        # Get sync status for this folder
+        # Check if this is a custom folder that hasn't been scanned yet
+        is_custom = folder.get("is_custom", False)
+        has_files = bool(folder.get("files"))
+
+        if is_custom and not has_files:
+            # Custom folder not yet scanned
+            cache.folder_stats[folder_id] = "not yet scanned"
+            continue
+
+        # Get sync status for this folder (enabled only)
         status = get_sync_status([folder], download_path, user_settings)
 
-        # Show downloaded/total for enabled setlists
-        if status.total_charts:
-            stats_parts.append(f"{status.synced_charts}/{status.total_charts} charts")
+        # Get excess/purgeable count for this folder
+        folder_purge_count, folder_purge_size = count_purgeable_charts([folder], download_path, user_settings)
+
+        # Show charts with excess prefix if applicable
+        # Use "archives" for custom folders before extraction, "charts" after we've scanned actual content
+        if status.total_charts or folder_purge_count:
+            if is_custom and not status.is_actual_charts:
+                unit = "archives"
+            else:
+                unit = "charts"
+
+            stats_parts.append(f"{format_colored_count(status.synced_charts, status.total_charts, excess=folder_purge_count)} {unit}")
 
         setlists = extract_subfolders_from_manifest(folder)
         if setlists and user_settings:
@@ -79,8 +217,7 @@ def compute_main_menu_cache(
             ]
             stats_parts.append(f"{len(enabled_setlists)}/{len(setlists)} setlists")
 
-        # Show downloaded size
-        stats_parts.append(format_size(status.synced_size))
+        stats_parts.append(format_colored_size(status.synced_size, status.total_size, excess_size=folder_purge_size))
 
         cache.folder_stats[folder_id] = ", ".join(stats_parts) if stats_parts else None
 
@@ -132,7 +269,9 @@ def show_main_menu(
     if cache is None:
         cache = compute_main_menu_cache(folders, user_settings, download_path, drives_config)
 
-    menu = Menu(title="Available chart packs:", subtitle=cache.subtitle, space_hint="Toggle")
+    # Build footer with color legend
+    legend = f"{Colors.RESET}White{Colors.MUTED} = synced   {Colors.RED}Red{Colors.MUTED} = purgeable"
+    menu = Menu(title="Available chart packs:", subtitle=cache.subtitle, space_hint="Toggle", footer=legend, esc_label="Quit")
 
     # Build folder lookup by folder_id
     folder_lookup = {f.get("folder_id", ""): f for f in folders}
@@ -219,8 +358,11 @@ def show_main_menu(
     # Show purge count from cache
     menu.add_item(MenuItem("Purge", hotkey="X", value=("purge", None), description=cache.purge_desc))
 
-    # Google sign-in/sign-out option
+    # Custom folders option
     menu.add_item(MenuDivider())
+    menu.add_item(MenuItem("Add Custom Folder", hotkey="A", value=("add_custom", None), description="Add your own Google Drive folder"))
+
+    # Google sign-in/sign-out option
     if user_oauth and user_oauth.is_signed_in:
         email = user_oauth.get_user_email()
         label = f"Sign out ({email})" if email else "Sign out of Google"
@@ -229,7 +371,7 @@ def show_main_menu(
         menu.add_item(MenuItem("Sign in to Google", hotkey="G", value=("signin", None), description="Faster downloads with your own quota"))
 
     menu.add_item(MenuDivider())
-    menu.add_item(MenuItem("Quit", hotkey="Q", value=("quit", None)))
+    menu.add_item(MenuItem("Quit", value=("quit", None)))
 
     result = menu.run(initial_index=selected_index)
     if result is None:
@@ -254,7 +396,39 @@ def show_main_menu(
     return (action, value, restore_pos)
 
 
-def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_path: Path = None) -> bool:
+def _compute_setlist_stats_from_files(folder: dict) -> dict:
+    """
+    Compute setlist stats from files list for custom folders.
+
+    Returns dict mapping setlist name to {archives: int, total_size: int}
+    """
+    from ..sync.downloader import is_archive_file
+
+    stats = {}
+    files = folder.get("files", [])
+
+    for f in files:
+        path = f.get("path", "")
+        size = f.get("size", 0)
+
+        if "/" not in path:
+            continue
+
+        setlist = path.split("/")[0]
+        if setlist not in stats:
+            stats[setlist] = {"archives": 0, "total_size": 0}
+
+        stats[setlist]["total_size"] += size
+
+        # Count archives (each archive is typically one chart/song pack)
+        filename = path.split("/")[-1]
+        if is_archive_file(filename):
+            stats[setlist]["archives"] += 1
+
+    return stats
+
+
+def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_path: Path = None) -> str | bool:
     """
     Show toggle menu for setlists within a drive.
 
@@ -263,17 +437,45 @@ def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_
         user_settings: User settings to read/write toggle states
         download_path: Path to download folder for sync status calculation
 
-    Returns True if settings were changed.
+    Returns:
+        - True if settings were changed
+        - False if no changes
+        - "scan" if user requested to scan custom folder
+        - "remove" if user requested to remove custom folder
     """
     folder_id = folder.get("folder_id", "")
     folder_name = folder.get("name", "Unknown")
     setlists = extract_subfolders_from_manifest(folder)
+    is_custom = folder.get("is_custom", False)
+    has_files = bool(folder.get("files"))
 
-    if not setlists:
+    # For non-custom folders with no setlists, nothing to show
+    if not setlists and not is_custom:
         return False
 
-    # Build lookup for setlist stats from manifest
-    setlist_stats = {sf.get("name"): sf for sf in folder.get("subfolders", [])}
+    # For custom folders with no setlists, show scan/remove options only
+    if not setlists and is_custom:
+        menu = Menu(title=f"{folder_name}:", subtitle="Folder not yet scanned")
+        scan_label = "Re-scan folder" if has_files else "Scan folder"
+        scan_desc = "Refresh file list from Google Drive" if has_files else "Get file list from Google Drive"
+        menu.add_item(MenuItem(scan_label, hotkey="S", value="scan", description=scan_desc))
+        menu.add_item(MenuItem("Remove folder", hotkey="X", value="remove", description="Remove from custom folders"))
+        menu.add_item(MenuDivider())
+        menu.add_item(MenuItem("Back", value="back"))
+
+        result = menu.run()
+        if result and result.value in ("scan", "remove"):
+            return result.value
+        return False
+
+    # Build lookup for setlist stats
+    # For custom folders, compute from files; for regular drives, use manifest subfolders
+    if is_custom:
+        custom_stats = _compute_setlist_stats_from_files(folder)
+        setlist_stats = {name: {"archives": data["archives"], "total_size": data["total_size"]}
+                        for name, data in custom_stats.items()}
+    else:
+        setlist_stats = {sf.get("name"): sf for sf in folder.get("subfolders", [])}
 
     changed = False
     selected_index = 0  # Track menu position to maintain after any action
@@ -285,17 +487,36 @@ def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_
         # Calculate sync status for just this drive
         subtitle = ""
         if not drive_enabled:
-            subtitle = "DRIVE DISABLED"
+            # Drive is disabled - check for purgeable content
+            if download_path:
+                excess_charts, excess_size = count_purgeable_charts([folder], download_path, user_settings)
+                if excess_charts > 0:
+                    subtitle = f"DRIVE DISABLED - {Colors.RED}Purgeable: {excess_charts} charts ({format_size(excess_size)}){Colors.RESET}"
+                else:
+                    subtitle = "DRIVE DISABLED"
+            else:
+                subtitle = "DRIVE DISABLED"
         elif download_path:
             status = get_sync_status([folder], download_path, user_settings)
-            if status.total_charts > 0:
-                pct = (status.synced_charts / status.total_charts) * 100
-                if status.is_synced:
-                    subtitle = f"Synced: {status.synced_charts:,} charts ({format_size(status.synced_size)})"
+            excess_charts, excess_size = count_purgeable_charts([folder], download_path, user_settings)
+
+            if status.total_charts > 0 or excess_charts > 0:
+                # Use "archives" for custom folders before extraction, "charts" after
+                if is_custom and not status.is_actual_charts:
+                    unit = "archives"
                 else:
-                    subtitle = f"Synced: {pct:.0f}% ({status.synced_charts:,}/{status.total_charts:,} charts)"
+                    unit = "charts"
+                subtitle = format_sync_subtitle(
+                    status,
+                    unit=unit,
+                    excess_charts=excess_charts,
+                    excess_size=excess_size
+                )
 
         menu = Menu(title=f"{folder_name} - Setlists:", subtitle=subtitle, space_hint="Toggle")
+
+        # Get local folder path for checking downloaded sizes
+        local_folder_path = download_path / folder_name if download_path else None
 
         # Add setlist toggle items (no hotkeys - too many setlists)
         for i, setlist_name in enumerate(setlists):
@@ -303,15 +524,41 @@ def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_
 
             # Get setlist stats
             stats = setlist_stats.get(setlist_name, {})
-            chart_count = stats.get("charts", {}).get("total", 0)
             total_size = stats.get("total_size", 0)
 
-            # Build description
+            # For custom folders, use archive count; for regular drives, use chart count
+            if is_custom:
+                item_count = stats.get("archives", 0)
+                unit = "archives" if item_count != 1 else "archive"
+            else:
+                item_count = stats.get("charts", {}).get("total", 0)
+                unit = "charts" if item_count != 1 else "chart"
+
+            # Check downloaded size and actual chart count for this setlist
+            downloaded_size = 0
+            actual_chart_count = 0
+            if local_folder_path:
+                setlist_path = local_folder_path / setlist_name
+                if setlist_path.exists():
+                    downloaded_size = _get_folder_size(setlist_path)
+                    # Scan for actual charts on disk (cached)
+                    actual_chart_count, _ = _scan_actual_charts(setlist_path)
+
+            # Use actual disk count if available, otherwise fall back to manifest
+            if actual_chart_count > 0:
+                item_count = actual_chart_count
+                unit = "charts" if item_count != 1 else "chart"
+
+            # Build description with color-coded sizes
             desc_parts = []
-            if chart_count:
-                desc_parts.append(f"{chart_count} charts")
+            if item_count:
+                desc_parts.append(f"{item_count} {unit}")
             if total_size:
-                desc_parts.append(format_size(total_size))
+                # synced_is_excess=True when setlist is OFF but has downloaded content (purgeable)
+                desc_parts.append(format_colored_size(
+                    downloaded_size, total_size,
+                    synced_is_excess=(not setlist_enabled and downloaded_size > 0)
+                ))
             description = ", ".join(desc_parts) if desc_parts else None
 
             # If drive is disabled, all items appear disabled (greyed out)
@@ -321,17 +568,28 @@ def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_
 
             menu.add_item(MenuItem(setlist_name, value=("toggle", i, setlist_name), description=description, disabled=item_disabled, show_toggle=show_toggle_colored))
 
-        menu.add_item(MenuDivider())
+        # Pinned items at bottom (always visible, not scrolled)
+        menu.add_item(MenuDivider(pinned=True))
 
         # Show Enable Drive option if drive is disabled
         if not drive_enabled:
-            menu.add_item(MenuItem("Enable Drive", hotkey="R", value=("enable_drive", None, None)))
-            menu.add_item(MenuDivider())
+            menu.add_item(MenuItem("Enable Drive", hotkey="R", value=("enable_drive", None, None), pinned=True))
+            menu.add_item(MenuDivider(pinned=True))
 
-        menu.add_item(MenuItem("Enable ALL", hotkey="E", value=("enable_all", None, None)))
-        menu.add_item(MenuItem("Disable ALL", hotkey="D", value=("disable_all", None, None)))
-        menu.add_item(MenuDivider())
-        menu.add_item(MenuItem("Back", hotkey="B", value=("back", None, None)))
+        menu.add_item(MenuItem("Enable ALL", hotkey="E", value=("enable_all", None, None), pinned=True))
+        menu.add_item(MenuItem("Disable ALL", hotkey="D", value=("disable_all", None, None), pinned=True))
+
+        # Custom folder options
+        if is_custom:
+            menu.add_item(MenuDivider(pinned=True))
+            has_files = bool(folder.get("files"))
+            scan_label = "Re-scan folder" if has_files else "Scan folder"
+            scan_desc = "Refresh file list from Google Drive" if has_files else "Get file list from Google Drive"
+            menu.add_item(MenuItem(scan_label, hotkey="S", value=("scan", None, None), description=scan_desc, pinned=True))
+            menu.add_item(MenuItem("Remove folder", hotkey="X", value=("remove", None, None), description="Remove from custom folders", pinned=True))
+
+        menu.add_item(MenuDivider(pinned=True))
+        menu.add_item(MenuItem("Back", value=("back", None, None), pinned=True))
 
         result = menu.run(initial_index=selected_index)
 
@@ -350,6 +608,9 @@ def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_
         elif action == "enable_all":
             # Use position before hotkey was pressed
             selected_index = menu._selected_before_hotkey
+            # Also enable the drive if it's currently disabled
+            if not user_settings.is_drive_enabled(folder_id):
+                user_settings.enable_drive(folder_id)
             user_settings.enable_all(folder_id, setlists)
             user_settings.save()
             changed = True
@@ -364,9 +625,21 @@ def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_
         elif action == "toggle":
             # Keep current position for toggle actions
             selected_index = menu._selected
+            # If enabling a setlist on a disabled drive, also enable the drive
+            is_enabling = not user_settings.is_subfolder_enabled(folder_id, setlist_name)
+            if is_enabling and not user_settings.is_drive_enabled(folder_id):
+                user_settings.enable_drive(folder_id)
             user_settings.toggle_subfolder(folder_id, setlist_name)
             user_settings.save()
             changed = True
+
+        elif action == "scan":
+            # Return special action for custom folder scan
+            return "scan"
+
+        elif action == "remove":
+            # Return special action for custom folder removal
+            return "remove"
 
     return changed
 
@@ -427,5 +700,72 @@ def show_oauth_prompt() -> bool:
             return True
         elif key == "n" or key == "\x1b":  # N or ESC
             return False
+
+
+def show_add_custom_folder(client, user_oauth) -> tuple[str | None, str | None]:
+    """
+    Show the Add Custom Folder screen.
+
+    Prompts user for Google Drive folder URL/ID, validates it,
+    and returns the folder info.
+
+    Args:
+        client: DriveClient instance with user's OAuth token
+        user_oauth: UserOAuthManager to check/get credentials
+
+    Returns:
+        Tuple of (folder_id, folder_name) if successful, (None, None) if cancelled
+    """
+    from .keyboard import input_with_esc, CancelInput, wait_with_skip
+    from ..utils import parse_drive_folder_url
+    from .colors import Colors
+
+    clear_screen()
+    print_header()
+    print()
+    print("  Add Custom Folder")
+    print()
+    print("  Paste a Google Drive folder URL or ID.")
+    print("  The folder must be shared (anyone with link) or in your Drive.")
+    print()
+    print("  Example: https://drive.google.com/drive/folders/abc123...")
+    print()
+    print(f"  {Colors.DIM}Press ESC to cancel{Colors.RESET}")
+    print()
+
+    try:
+        url_input = input_with_esc("  URL or ID: ")
+    except CancelInput:
+        return None, None
+
+    if not url_input.strip():
+        print("\n  No URL entered.")
+        wait_with_skip(2)
+        return None, None
+
+    # Parse the URL/ID
+    folder_id, error = parse_drive_folder_url(url_input)
+    if not folder_id:
+        print(f"\n  {Colors.BOLD}{error}{Colors.RESET}")
+        print("  Please use a Google Drive folder link like:")
+        print("  https://drive.google.com/drive/folders/abc123...")
+        wait_with_skip(3)
+        return None, None
+
+    # Validate the folder
+    print("\n  Checking folder access...")
+
+    is_valid, folder_name = client.validate_folder(folder_id)
+
+    if not is_valid:
+        print(f"\n  {Colors.BOLD}Could not access folder.{Colors.RESET}")
+        print("  Make sure the folder is shared or you have access.")
+        wait_with_skip(3)
+        return None, None
+
+    print(f"  Found: {Colors.BOLD}{folder_name}{Colors.RESET}")
+    wait_with_skip(1)
+
+    return folder_id, folder_name
 
 

@@ -223,3 +223,28 @@ class DriveClient:
                 break
 
         return all_changes, current_token
+
+    def validate_folder(self, folder_id: str) -> tuple[bool, Optional[str]]:
+        """
+        Check if a folder is accessible and get its name.
+
+        Args:
+            folder_id: Google Drive folder ID
+
+        Returns:
+            Tuple of (is_valid, folder_name)
+            - (True, "Folder Name") if accessible
+            - (False, None) if not accessible or not a folder
+        """
+        metadata = self.get_file_metadata(
+            folder_id, fields="id,name,mimeType"
+        )
+
+        if not metadata:
+            return False, None
+
+        # Check it's actually a folder
+        if metadata.get("mimeType") != "application/vnd.google-apps.folder":
+            return False, None
+
+        return True, metadata.get("name")

@@ -126,37 +126,132 @@ class EscMonitor:
 # Archive handling helpers
 # =============================================================================
 
-def read_checksum(folder_path: Path) -> str:
-    """Read stored MD5 from check.txt."""
+def read_checksum(folder_path: Path, archive_name: str = None) -> str:
+    """
+    Read stored MD5 from check.txt.
+
+    Args:
+        folder_path: Path to folder containing check.txt
+        archive_name: Optional archive name to look up (for multi-archive format)
+
+    Returns:
+        MD5 string, or empty string if not found
+    """
     checksum_path = folder_path / CHECKSUM_FILE
     if not checksum_path.exists():
         return ""
     try:
         with open(checksum_path) as f:
             data = json.load(f)
+
+            # New multi-archive format
+            if "archives" in data and archive_name:
+                archive_data = data["archives"].get(archive_name, {})
+                return archive_data.get("md5", "")
+
+            # Old single-archive format (backwards compat)
             return data.get("md5", "")
     except (json.JSONDecodeError, IOError):
         return ""
 
 
-def write_checksum(folder_path: Path, md5: str, archive_name: str, extracted_size: int = 0):
-    """Write MD5 and extracted size to check.txt."""
+def write_checksum(
+    folder_path: Path,
+    md5: str,
+    archive_name: str,
+    archive_size: int = 0,
+    extracted_size: int = 0,
+    size_novideo: int = None,
+    extracted_to: str = None
+):
+    """
+    Write MD5 and size info to check.txt.
+
+    Uses multi-archive format that stores all archives in one file.
+
+    Args:
+        folder_path: Path to folder for check.txt
+        md5: MD5 hash of the archive
+        archive_name: Name of the archive file
+        archive_size: Size of the archive file (download size)
+        extracted_size: Size after extraction (canonical size on disk)
+        size_novideo: Size after video removal (only if different from extracted_size)
+        extracted_to: Name of folder contents were extracted to (if different from archive)
+    """
     checksum_path = folder_path / CHECKSUM_FILE
     folder_path.mkdir(parents=True, exist_ok=True)
+
+    # Read existing data (if any)
+    existing = {}
+    if checksum_path.exists():
+        try:
+            with open(checksum_path) as f:
+                existing = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+
+    # Migrate old format to new format if needed
+    if "archives" not in existing:
+        archives = {}
+        # Migrate old single-archive entry if present
+        if "md5" in existing and "archive" in existing:
+            old_name = existing["archive"]
+            archives[old_name] = {
+                "md5": existing["md5"],
+                "size": existing.get("size", 0),
+            }
+        existing = {"archives": archives}
+
+    # Add/update this archive
+    archive_data = {
+        "md5": md5,
+        "archive_size": archive_size,
+        "size": extracted_size,
+    }
+    # Only store size_novideo if videos were removed and size changed
+    if size_novideo is not None and size_novideo != extracted_size:
+        archive_data["size_novideo"] = size_novideo
+    if extracted_to:
+        archive_data["extracted_to"] = extracted_to
+
+    existing["archives"][archive_name] = archive_data
+
     with open(checksum_path, "w") as f:
-        json.dump({"md5": md5, "archive": archive_name, "size": extracted_size}, f)
+        json.dump(existing, f, indent=2)
 
 
 def read_checksum_data(folder_path: Path) -> dict:
-    """Read full check.txt data including size."""
+    """
+    Read full check.txt data.
+
+    Returns dict with "archives" key containing all archive info.
+    Handles both old and new formats.
+    """
     checksum_path = folder_path / CHECKSUM_FILE
     if not checksum_path.exists():
-        return {}
+        return {"archives": {}}
     try:
         with open(checksum_path) as f:
-            return json.load(f)
+            data = json.load(f)
+
+        # Already new format
+        if "archives" in data:
+            return data
+
+        # Migrate old format on read
+        if "md5" in data and "archive" in data:
+            return {
+                "archives": {
+                    data["archive"]: {
+                        "md5": data["md5"],
+                        "size": data.get("size", 0),
+                    }
+                }
+            }
+
+        return {"archives": {}}
     except (json.JSONDecodeError, IOError):
-        return {}
+        return {"archives": {}}
 
 
 def get_folder_size(folder_path: Path) -> int:
@@ -242,22 +337,22 @@ def is_archive_file(filename: str) -> bool:
 
 class FolderProgress(ProgressTracker):
     """
-    Progress tracker that reports completed folders/charts.
+    Progress tracker that reports completed folders/charts/archives.
 
     Groups files by their parent folder and prints when each folder completes.
-    Distinguishes between chart folders (with song.ini/notes) and regular folders.
+    Also tracks individual archive completions within folders.
     """
 
     def __init__(self, total_files: int, total_folders: int):
         super().__init__()
         self.total_files = total_files
         self.total_folders = total_folders
-        self.total_charts = 0
+        self.total_charts = 0  # Total chart folders OR individual archives
         self.completed_files = 0
         self.completed_charts = 0
         self.start_time = time.time()
 
-        # Track files per folder: {folder_path: {expected: int, completed: int, is_chart: bool}}
+        # Track files per folder: {folder_path: {expected: int, completed: int, is_chart: bool, archive_count: int}}
         self.folder_progress = {}
 
     def register_folders(self, tasks):
@@ -266,31 +361,73 @@ class FolderProgress(ProgressTracker):
         for task in tasks:
             folder = str(task.local_path.parent)
             if folder not in folder_files:
-                folder_files[folder] = []
-            folder_files[folder].append(task.local_path.name.lower())
+                folder_files[folder] = {"files": [], "archives": []}
+            filename = task.local_path.name.lower()
+            folder_files[folder]["files"].append(filename)
+            if task.is_archive:
+                # Store original name for display
+                display_name = task.local_path.name
+                if display_name.startswith("_download_"):
+                    display_name = display_name[10:]
+                folder_files[folder]["archives"].append(display_name)
 
-        for folder, filenames in folder_files.items():
+        for folder, data in folder_files.items():
+            filenames = data["files"]
+            archives = data["archives"]
+
             # Check for chart markers (song.ini, notes.mid, etc.)
             has_markers = bool(set(filenames) & CHART_MARKERS)
-            # Check for archive files (.zip, .7z, .rar)
-            has_archives = any(
-                f.endswith(tuple(CHART_ARCHIVE_EXTENSIONS)) for f in filenames
-            )
-            is_chart = has_markers or has_archives
+            archive_count = len(archives)
 
-            self.folder_progress[folder] = {
-                "expected": len(filenames),
-                "completed": 0,
-                "is_chart": is_chart
-            }
-            if is_chart:
+            # A folder with archives: each archive counts as a chart
+            # A folder with markers (no archives): the folder itself is one chart
+            if archive_count > 0:
+                self.folder_progress[folder] = {
+                    "expected": len(filenames),
+                    "completed": 0,
+                    "is_chart": False,  # Don't report folder completion
+                    "archive_count": archive_count,
+                    "archives_completed": 0,
+                }
+                self.total_charts += archive_count
+            elif has_markers:
+                self.folder_progress[folder] = {
+                    "expected": len(filenames),
+                    "completed": 0,
+                    "is_chart": True,
+                    "archive_count": 0,
+                    "archives_completed": 0,
+                }
                 self.total_charts += 1
+            else:
+                # Non-chart folder
+                self.folder_progress[folder] = {
+                    "expected": len(filenames),
+                    "completed": 0,
+                    "is_chart": False,
+                    "archive_count": 0,
+                    "archives_completed": 0,
+                }
 
         self.total_folders = len(folder_files)
 
-    def file_completed(self, local_path: Path) -> tuple[str, bool] | None:
+    def archive_completed(self, local_path: Path, archive_name: str):
+        """Mark an archive as completed and print progress."""
+        with self.lock:
+            if self._closed:
+                return
+
+            folder = str(local_path.parent)
+            if folder in self.folder_progress:
+                self.folder_progress[folder]["archives_completed"] += 1
+
+            self.completed_charts += 1
+            self._print_item_complete(archive_name)
+
+    def file_completed(self, local_path: Path, is_archive: bool = False) -> tuple[str, bool] | None:
         """
         Mark a file as completed. Returns (folder_name, is_chart) if folder is now complete.
+        For archives, returns None (they're reported via archive_completed instead).
         """
         with self.lock:
             if self._closed:
@@ -302,17 +439,36 @@ class FolderProgress(ProgressTracker):
             if folder in self.folder_progress:
                 self.folder_progress[folder]["completed"] += 1
 
-                # Check if folder is complete
-                if self.folder_progress[folder]["completed"] >= self.folder_progress[folder]["expected"]:
-                    is_chart = self.folder_progress[folder]["is_chart"]
-                    if is_chart:
-                        self.completed_charts += 1
-                    return (local_path.parent.name, is_chart)
+                # Check if folder is complete (only for non-archive chart folders)
+                prog = self.folder_progress[folder]
+                if prog["completed"] >= prog["expected"] and prog["is_chart"]:
+                    self.completed_charts += 1
+                    return (local_path.parent.name, True)
 
             return None
 
+    def _print_item_complete(self, item_name: str):
+        """Print progress when a chart or archive completes."""
+        if self._closed:
+            return
+
+        term_width = shutil.get_terminal_size().columns
+        pct = (self.completed_charts / self.total_charts * 100) if self.total_charts > 0 else 0
+
+        core = f"  {pct:5.1f}% ({self.completed_charts}/{self.total_charts})"
+
+        remaining = term_width - len(core) - 5
+        if remaining > 10:
+            if len(item_name) > remaining:
+                item_name = item_name[:remaining-3] + "..."
+            line = f"{core}  {item_name}"
+        else:
+            line = core
+
+        print(line)
+
     def print_folder_complete(self, folder_name: str, is_chart: bool):
-        """Print progress when a folder completes."""
+        """Print progress when a chart folder completes."""
         with self.lock:
             if self._closed:
                 return
@@ -321,20 +477,7 @@ class FolderProgress(ProgressTracker):
             if not is_chart:
                 return
 
-            term_width = shutil.get_terminal_size().columns
-            pct = (self.completed_charts / self.total_charts * 100) if self.total_charts > 0 else 0
-
-            core = f"  {pct:5.1f}% ({self.completed_charts}/{self.total_charts})"
-
-            remaining = term_width - len(core) - 5
-            if remaining > 10:
-                if len(folder_name) > remaining:
-                    folder_name = folder_name[:remaining-3] + "..."
-                line = f"{core}  {folder_name}"
-            else:
-                line = core
-
-            print(line)
+            self._print_item_complete(folder_name)
 
 
 @dataclass
@@ -401,12 +544,18 @@ class FileDownloader:
         session: aiohttp.ClientSession,
         task: DownloadTask,
         semaphore: asyncio.Semaphore,
+        progress_tracker: Optional["FolderProgress"] = None,
     ) -> DownloadResult:
         """
         Download a single file with retries (async).
 
         Tries public URL first, falls back to OAuth if available.
         """
+        # Get display name (strip _download_ prefix for archives)
+        display_name = task.local_path.name
+        if display_name.startswith("_download_"):
+            display_name = display_name[10:]
+
         async with semaphore:
             for attempt in range(self.max_retries):
                 try:
@@ -429,16 +578,16 @@ class FileDownloader:
                                 headers = {"Authorization": f"Bearer {self.auth_token}"}
                                 async with session.get(api_url, headers=headers) as auth_response:
                                     auth_response.raise_for_status()
-                                    return await self._write_response(auth_response, task)
+                                    return await self._write_response(auth_response, task, progress_tracker)
                             else:
                                 return DownloadResult(
                                     success=False,
                                     file_path=task.local_path,
-                                    message=f"SKIP (rate limited): {task.local_path.name}",
+                                    message=f"SKIP (rate limited): {display_name}",
                                     retryable=True,  # Can retry later
                                 )
 
-                        return await self._write_response(response, task)
+                        return await self._write_response(response, task, progress_tracker)
 
                 except asyncio.TimeoutError:
                     if attempt < self.max_retries - 1:
@@ -447,7 +596,7 @@ class FileDownloader:
                     return DownloadResult(
                         success=False,
                         file_path=task.local_path,
-                        message=f"ERR (timeout): {task.local_path.name}",
+                        message=f"ERR (timeout): {display_name}",
                         retryable=True,
                     )
 
@@ -456,8 +605,23 @@ class FileDownloader:
                         return DownloadResult(
                             success=False,
                             file_path=task.local_path,
-                            message=f"SKIP (access denied): {task.local_path.name}",
+                            message=f"SKIP (access denied): {display_name}",
                         )
+                    # 401 = auth required - try OAuth if available
+                    if e.status == 401 and self.auth_token:
+                        try:
+                            api_url = f"{self.API_DOWNLOAD_URL.format(file_id=task.file_id)}&acknowledgeAbuse=true"
+                            headers = {"Authorization": f"Bearer {self.auth_token}"}
+                            async with session.get(api_url, headers=headers) as auth_response:
+                                auth_response.raise_for_status()
+                                return await self._write_response(auth_response, task, progress_tracker)
+                        except aiohttp.ClientResponseError as auth_e:
+                            # OAuth also failed
+                            return DownloadResult(
+                                success=False,
+                                file_path=task.local_path,
+                                message=f"ERR (auth failed): {display_name}",
+                            )
                     if attempt < self.max_retries - 1:
                         await asyncio.sleep(0.5 * (attempt + 1))
                         continue
@@ -466,7 +630,7 @@ class FileDownloader:
                     return DownloadResult(
                         success=False,
                         file_path=task.local_path,
-                        message=f"ERR (HTTP {e.status}): {task.local_path.name}",
+                        message=f"ERR (HTTP {e.status}): {display_name}",
                         retryable=is_server_error,
                     )
 
@@ -481,19 +645,20 @@ class FileDownloader:
                     return DownloadResult(
                         success=False,
                         file_path=task.local_path,
-                        message=f"ERR: {task.local_path.name} - {e}",
+                        message=f"ERR: {display_name} - {e}",
                     )
 
             return DownloadResult(
                 success=False,
                 file_path=task.local_path,
-                message=f"ERR: {task.local_path.name} - failed after {self.max_retries} attempts",
+                message=f"ERR: {display_name} - failed after {self.max_retries} attempts",
             )
 
     async def _write_response(
         self,
         response: aiohttp.ClientResponse,
         task: DownloadTask,
+        progress_tracker: Optional["FolderProgress"] = None,
     ) -> DownloadResult:
         """Write response content to file."""
         # Create parent directories
@@ -512,12 +677,37 @@ class FileDownloader:
                 f.write(data)
             downloaded_bytes = len(data)
         else:
-            # Larger file - stream to disk
+            # Larger file - stream to disk with progress updates
+            # Use task.size if content_length is unreliable (Google Drive sometimes returns wrong values)
+            total_size = task.size if task.size > 0 else content_length
+            download_start = time.time()
+            last_progress_time = download_start
+            progress_interval = 1.5  # Report every 1.5 seconds
+            progress_shown = False  # Track if we've shown progress for this file
+            time_threshold = 2.0  # Only show progress after file has been downloading this long
+
+            # Get display name (strip _download_ prefix if present)
+            display_name = task.local_path.name
+            if display_name.startswith("_download_"):
+                display_name = display_name[10:]
+
             with open(task.local_path, "wb") as f:
                 async for chunk in response.content.iter_chunked(self.chunk_size):
                     if chunk:
                         f.write(chunk)
                         downloaded_bytes += len(chunk)
+
+                        # Show progress only for files downloading longer than threshold
+                        if progress_tracker:
+                            now = time.time()
+                            elapsed = now - download_start
+                            if elapsed >= time_threshold and now - last_progress_time >= progress_interval:
+                                last_progress_time = now
+                                progress_shown = True
+                                pct = (downloaded_bytes / total_size * 100) if total_size > 0 else 0
+                                size_mb = downloaded_bytes / (1024 * 1024)
+                                total_mb = total_size / (1024 * 1024)
+                                progress_tracker.write(f"  ↓ {display_name}: {size_mb:.0f}/{total_mb:.0f} MB ({pct:.0f}%)")
 
         return DownloadResult(
             success=True,
@@ -539,21 +729,53 @@ class FileDownloader:
         archive_path = task.local_path
         chart_folder = archive_path.parent
 
+        # Determine extracted folder name (archive name without extension)
+        archive_name = archive_path.name.replace("_download_", "", 1)
+        archive_stem = Path(archive_name).stem
+        extracted_folder = chart_folder / archive_stem
+
+        # Track archive size (download size)
+        archive_size = task.size
+
+        # Measure folder size BEFORE extraction to calculate delta
+        size_before = get_folder_size(chart_folder)
+
         # Extract archive
         success, error = extract_archive(archive_path, chart_folder)
         if not success:
             return False, f"Extract failed: {error}"
 
-        # Delete video files if enabled
+        # Measure size AFTER extraction (before video removal)
+        if extracted_folder.exists() and extracted_folder.is_dir():
+            extracted_size = get_folder_size(extracted_folder)
+        else:
+            size_after_extract = get_folder_size(chart_folder)
+            extracted_size = size_after_extract - size_before
+
+        # Delete video files if enabled and measure size after
+        size_novideo = None
         if self.delete_videos:
-            delete_video_files(chart_folder)
+            # Delete videos in extracted folder if it exists, otherwise in chart_folder
+            video_folder = extracted_folder if extracted_folder.exists() else chart_folder
+            deleted_count = delete_video_files(video_folder)
 
-        # Calculate extracted size (after video deletion)
-        extracted_size = get_folder_size(chart_folder)
+            # Only measure if videos were actually deleted
+            if deleted_count > 0:
+                if extracted_folder.exists() and extracted_folder.is_dir():
+                    size_novideo = get_folder_size(extracted_folder)
+                else:
+                    size_after_videos = get_folder_size(chart_folder)
+                    size_novideo = size_after_videos - size_before
 
-        # Write checksum with size
-        archive_name = archive_path.name.replace("_download_", "", 1)
-        write_checksum(chart_folder, task.md5, archive_name, extracted_size)
+        # Write checksum with size info
+        write_checksum(
+            chart_folder,
+            task.md5,
+            archive_name,
+            archive_size=archive_size,
+            extracted_size=extracted_size,
+            size_novideo=size_novideo
+        )
 
         # Delete the archive
         try:
@@ -568,15 +790,16 @@ class FileDownloader:
         tasks: List[DownloadTask],
         progress: Optional[FolderProgress],
         progress_callback: Optional[Callable[[DownloadResult], None]],
-    ) -> Tuple[int, int, List[DownloadTask], bool]:
+    ) -> Tuple[int, int, List[DownloadTask], int, bool]:
         """
         Internal async implementation of download_many.
 
         Returns:
-            Tuple of (downloaded_count, error_count, retryable_tasks, cancelled)
+            Tuple of (downloaded_count, error_count, retryable_tasks, auth_failures, cancelled)
         """
         downloaded = 0
         errors = 0
+        auth_failures = 0  # Track 401/auth errors separately
         retryable_tasks: List[DownloadTask] = []
         cancelled = False
         loop = asyncio.get_event_loop()
@@ -601,7 +824,7 @@ class FileDownloader:
             # Create all download coroutines as tasks
             pending = {
                 asyncio.create_task(
-                    self._download_file_async(session, task, semaphore),
+                    self._download_file_async(session, task, semaphore, progress),
                     name=str(task.local_path)
                 ): task
                 for task in tasks
@@ -649,14 +872,30 @@ class FileDownloader:
                                         progress.write(f"  ERR: {task.local_path.parent.name} - {archive_error}")
                                     continue
 
+                                # Report archive completion
+                                if progress:
+                                    # Get display name (strip _download_ prefix)
+                                    archive_name = task.local_path.name
+                                    if archive_name.startswith("_download_"):
+                                        archive_name = archive_name[10:]
+                                    progress.archive_completed(task.local_path, archive_name)
+
                             downloaded += 1
                             if progress:
-                                completed_info = progress.file_completed(result.file_path)
-                                if completed_info:
-                                    folder_name, is_chart = completed_info
-                                    progress.print_folder_complete(folder_name, is_chart)
+                                # For non-archive files, check if folder is complete
+                                if not task.is_archive:
+                                    completed_info = progress.file_completed(result.file_path)
+                                    if completed_info:
+                                        folder_name, is_chart = completed_info
+                                        progress.print_folder_complete(folder_name, is_chart)
+                                else:
+                                    # Just mark file as completed (archive already reported)
+                                    progress.file_completed(result.file_path)
                         else:
                             errors += 1
+                            # Track auth failures separately for better user guidance
+                            if "auth" in result.message.lower() or "401" in result.message:
+                                auth_failures += 1
                             # Track retryable failures for later retry
                             if result.retryable:
                                 retryable_tasks.append(task)
@@ -672,7 +911,7 @@ class FileDownloader:
                 for t in pending:
                     t.cancel()
 
-        return downloaded, errors, retryable_tasks, cancelled
+        return downloaded, errors, retryable_tasks, auth_failures, cancelled
 
     def download_many(
         self,
@@ -722,9 +961,10 @@ class FileDownloader:
         esc_monitor = EscMonitor(on_esc=handle_cancel)
         esc_monitor.start()
 
+        auth_failures = 0
         try:
             # Run the async download
-            downloaded, errors, retryable, cancelled = asyncio.run(
+            downloaded, errors, retryable, auth_failures, cancelled = asyncio.run(
                 self._download_many_async(tasks, progress, progress_callback)
             )
             rate_limited = len(retryable)
@@ -748,6 +988,23 @@ class FileDownloader:
                 progress.close()
                 if cancelled:
                     print(f"  Cancelled. Downloaded {downloaded} files ({progress.completed_charts} complete charts).")
+
+        # Print helpful guidance for auth failures
+        if auth_failures > 0:
+            print()
+            print(f"  ⚠ {auth_failures} files failed due to access restrictions.")
+            print()
+            print("  These files aren't shared publicly. To fix this:")
+            print()
+            print("    1. Open the folder link in your browser while signed in to Google")
+            print("    2. Right-click the folder → 'Add shortcut to Drive' → select My Drive")
+            print()
+            print("  This adds the folder to your Drive, which grants your account access.")
+            print("  Then try downloading again.")
+            print()
+            print("  If that doesn't work, the folder may have restricted sharing settings.")
+            print("  Ask the owner to set sharing to 'Anyone with the link' for public access.")
+            print()
 
         return downloaded, 0, permanent_errors, rate_limited, cancelled
 
@@ -785,7 +1042,7 @@ class FileDownloader:
                 local_path = local_base / file_path
                 chart_folder = local_path.parent
 
-                stored_md5 = read_checksum(chart_folder)
+                stored_md5 = read_checksum(chart_folder, archive_name=file_name)
                 if stored_md5 and stored_md5 == file_md5:
                     # Already extracted with matching checksum
                     skipped += 1
