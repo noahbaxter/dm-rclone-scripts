@@ -25,10 +25,13 @@ python sync.py
 
 ## Features
 
-- Smart sync - only downloads new/changed files
-- Parallel downloads with auto-retry on rate limits
-- Subfolder filtering - download only what you want
-- Custom folders - add your own public Google Drive folders
+- **Smart sync** - only downloads new/changed files
+- **Parallel downloads** with auto-retry on rate limits
+- **Setlist filtering** - enable/disable individual setlists per drive
+- **Custom folders** - add your own Google Drive folders
+- **Optional sign-in** - get your own download quota for faster syncs
+- **Archive support** - auto-extracts .7z/.zip archives with optional video removal
+- **Purge** - clean up disabled content to free disk space
 
 ## For Admins
 
