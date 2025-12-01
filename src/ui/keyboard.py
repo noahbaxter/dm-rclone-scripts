@@ -38,11 +38,39 @@ def raw_terminal():
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
+@contextmanager
+def cbreak_noecho():
+    """Context manager for cbreak mode with echo disabled (Unix only, no-op on Windows).
+
+    Unlike raw mode, this preserves output processing (newlines work correctly)
+    while disabling input echo and line buffering.
+    """
+    if os.name == 'nt':
+        yield None
+    else:
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        try:
+            # Copy settings
+            new_settings = termios.tcgetattr(fd)
+            # Disable echo and canonical mode (line buffering)
+            new_settings[3] = new_settings[3] & ~(termios.ECHO | termios.ICANON)
+            # Set minimum chars to read = 1, timeout = 0
+            new_settings[6][termios.VMIN] = 1
+            new_settings[6][termios.VTIME] = 0
+            termios.tcsetattr(fd, termios.TCSANOW, new_settings)
+            yield fd
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
 # Special key constants
 KEY_UP = "KEY_UP"
 KEY_DOWN = "KEY_DOWN"
 KEY_LEFT = "KEY_LEFT"
 KEY_RIGHT = "KEY_RIGHT"
+KEY_PAGE_UP = "KEY_PAGE_UP"
+KEY_PAGE_DOWN = "KEY_PAGE_DOWN"
 KEY_ENTER = "KEY_ENTER"
 KEY_ESC = "KEY_ESC"
 KEY_BACKSPACE = "KEY_BACKSPACE"
@@ -79,6 +107,10 @@ def getch(return_special_keys: bool = False) -> str:
                     return KEY_LEFT
                 elif key_code == b'M':
                     return KEY_RIGHT
+                elif key_code == b'I':
+                    return KEY_PAGE_UP
+                elif key_code == b'Q':
+                    return KEY_PAGE_DOWN
             return ''
         if ch == b'\x1b':
             # Check for escape sequence
@@ -150,6 +182,11 @@ def getch(return_special_keys: bool = False) -> str:
                                 return KEY_RIGHT
                             elif 'D' in extra:
                                 return KEY_LEFT
+                            # Parse Page Up/Down: ESC [ 5 ~ and ESC [ 6 ~
+                            elif '5~' in extra:
+                                return KEY_PAGE_UP
+                            elif '6~' in extra:
+                                return KEY_PAGE_DOWN
                         return ''  # Unknown escape sequence
                     else:
                         # Standalone ESC
@@ -293,6 +330,41 @@ def menu_input(prompt: str = "") -> str:
             if len(result) == 1 and ch.upper() in 'QAXCRP':
                 print()
                 return ch.upper()
+
+
+def flush_input():
+    """
+    Flush any pending input from stdin.
+
+    Call this before rendering to prevent escape sequence artifacts
+    when keys are pressed rapidly.
+    """
+    if os.name == 'nt':
+        while msvcrt.kbhit():
+            msvcrt.getch()
+    else:
+        import fcntl
+        fd = sys.stdin.fileno()
+        # Save terminal settings
+        old_settings = termios.tcgetattr(fd)
+        # Save file flags
+        flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+        try:
+            # Set raw mode and non-blocking
+            tty.setraw(fd)
+            fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+            # Drain all pending input
+            while True:
+                try:
+                    ch = sys.stdin.read(1)
+                    if not ch:
+                        break
+                except (IOError, BlockingIOError):
+                    break
+        finally:
+            # Restore terminal settings and flags
+            fcntl.fcntl(fd, fcntl.F_SETFL, flags)
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 
 def wait_with_skip(seconds: float = 2.0):
