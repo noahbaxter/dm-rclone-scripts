@@ -30,8 +30,31 @@ python sync.py
 - **Setlist filtering** - enable/disable individual setlists per drive
 - **Custom folders** - add your own Google Drive folders
 - **Optional sign-in** - get your own download quota for faster syncs
-- **Archive support** - auto-extracts .7z/.zip archives with optional video removal
+- **Archive support** - auto-extracts .7z/.zip/.rar archives with optional video removal
 - **Purge** - clean up disabled content to free disk space
+
+## RAR Support (Windows)
+
+RAR files need **7-Zip** or **WinRAR** installed and added to PATH.
+
+### Option 1: 7-Zip (recommended)
+1. Install [7-Zip](https://www.7-zip.org/)
+2. Add to PATH: `C:\Program Files\7-Zip`
+
+### Option 2: WinRAR
+1. Install [WinRAR](https://www.rarlab.com/download.htm)
+2. Add to PATH: `C:\Program Files\WinRAR`
+
+### How to add to PATH
+1. Open Start Menu, search **"Environment Variables"**
+2. Click **"Edit the system environment variables"**
+3. Click **Environment Variables** button
+4. Under **System variables**, select **Path** → **Edit**
+5. Click **New** and paste the path from above
+6. Click **OK** on all windows
+7. **Restart DM Sync**
+
+**Verify:** Open Command Prompt and type `7z` or `unrar` - you should see help text, not "not recognized".
 
 ## For Admins
 

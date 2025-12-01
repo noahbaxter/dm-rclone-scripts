@@ -55,8 +55,9 @@ except (ImportError, LookupError):
     HAS_RAR_LIB = False
 
 # Check for CLI tools as fallback for RAR extraction
+# Priority: unrar (fastest) > 7z (common on Windows) > unar (macOS)
 RAR_CLI_TOOL = None
-for tool in ["unrar", "unar"]:
+for tool in ["unrar", "7z", "unar"]:
     if shutil.which(tool):
         RAR_CLI_TOOL = tool
         break
@@ -296,6 +297,14 @@ def extract_archive(archive_path: Path, dest_folder: Path) -> Tuple[bool, str]:
                 )
                 if result.returncode != 0:
                     return False, f"unrar failed: {result.stderr}"
+            elif RAR_CLI_TOOL == "7z":
+                # Use 7-Zip CLI (common on Windows)
+                result = subprocess.run(
+                    ["7z", "x", str(archive_path), f"-o{dest_folder}", "-y"],
+                    capture_output=True, text=True
+                )
+                if result.returncode != 0:
+                    return False, f"7z failed: {result.stderr}"
             elif RAR_CLI_TOOL == "unar":
                 # Use unar CLI (macOS)
                 result = subprocess.run(
@@ -305,7 +314,7 @@ def extract_archive(archive_path: Path, dest_folder: Path) -> Tuple[bool, str]:
                 if result.returncode != 0:
                     return False, f"unar failed: {result.stderr}"
             else:
-                return False, "RAR support unavailable (install unrar or unar)"
+                return False, "RAR support unavailable (install 7-Zip, WinRAR, or unar)"
         else:
             return False, f"Unknown archive type: {ext}"
         return True, ""
