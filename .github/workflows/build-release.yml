@@ -69,6 +69,7 @@ jobs:
           CERTIFI_PATH=$(python -c "import certifi; print(certifi.where())")
           pyinstaller --onefile --name dm-sync-macos --clean --noconfirm \
             --add-data "drives.json:." \
+            --add-data "VERSION:." \
             --add-data "$CERTIFI_PATH:certifi" \
             --hidden-import certifi \
             sync.py
@@ -80,6 +81,7 @@ jobs:
           $CERTIFI_PATH = python -c "import certifi; print(certifi.where())"
           pyinstaller --onefile --name dm-sync --clean --noconfirm `
             --add-data "drives.json;." `
+            --add-data "VERSION;." `
             --add-data "$CERTIFI_PATH;certifi" `
             --hidden-import certifi `
             sync.py
