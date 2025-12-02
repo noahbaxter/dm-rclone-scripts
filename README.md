@@ -33,6 +33,21 @@ python sync.py
 - **Archive support** - auto-extracts .7z/.zip/.rar archives with optional video removal
 - **Purge** - clean up disabled content to free disk space
 
+## Troubleshooting
+
+### Logs
+
+Logs are saved to `.dm-sync/logs/` in the same folder as the executable. Each day creates a new log file (e.g., `2024-12-01.log`).
+
+### Windows Long Paths
+
+If downloads fail with path errors, Windows may be blocking paths over 260 characters. To fix:
+
+1. Open Registry Editor (`regedit`)
+2. Navigate to `HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem`
+3. Set `LongPathsEnabled` to `1`
+4. Restart your computer
+
 ## RAR Support (Windows)
 
 RAR files need **7-Zip** or **WinRAR** installed and added to PATH.
