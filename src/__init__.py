@@ -23,7 +23,7 @@ from .paths import (
 )
 
 # Drive module
-from .drive import DriveClient, FolderScanner, OAuthManager, UserOAuthManager, ChangeTracker
+from .drive import DriveClient, FolderScanner, OAuthManager, UserOAuthManager, AuthManager, ChangeTracker
 
 # Sync module
 from .sync import FileDownloader, FolderSync, purge_all_folders, get_sync_status, SyncStatus
@@ -60,6 +60,7 @@ __all__ = [
     "FolderScanner",
     "OAuthManager",
     "UserOAuthManager",
+    "AuthManager",
     "ChangeTracker",
     # Sync
     "FileDownloader",

@@ -17,8 +17,7 @@ from src import (
     DriveClient,
     Manifest,
     FolderSync,
-    OAuthManager,
-    UserOAuthManager,
+    AuthManager,
     purge_all_folders,
     clear_screen,
     set_terminal_size,
@@ -105,23 +104,12 @@ class SyncApp:
         # Load custom folders
         self.custom_folders = CustomFolders.load(get_local_manifest_path())
 
-        # User OAuth for downloads (optional, reduces rate limiting)
-        self.user_oauth = UserOAuthManager(token_path=get_token_path())
-
-        # Get OAuth token for authenticated downloads
-        # Prefer user token (their quota), fall back to admin token if configured
-        auth_token = None
-        if self.user_oauth.is_signed_in:
-            auth_token = self.user_oauth.get_token()
-        else:
-            # Fall back to admin OAuth if configured (dev/testing only)
-            admin_auth = OAuthManager()
-            if admin_auth.is_available and admin_auth.is_configured:
-                auth_token = admin_auth.get_token()
+        # Unified auth manager (handles user + admin fallback, token refresh)
+        self.auth = AuthManager(token_path=get_token_path())
 
         self.sync = FolderSync(
             self.client,
-            auth_token=auth_token,
+            auth_token=self.auth.get_token_getter(),
             delete_videos=self.user_settings.delete_videos
         )
         self.folders = []
@@ -271,7 +259,7 @@ class SyncApp:
         """Scan a single custom folder."""
         from src.drive import FolderScanner
 
-        if not self.user_oauth.is_signed_in:
+        if not self.auth.is_signed_in:
             print("\n  Please sign in to Google first to scan custom folders.")
             wait_with_skip(3)
             return
@@ -284,7 +272,7 @@ class SyncApp:
         print(f"Scanning: {folder_name}")
         print("=" * 50)
 
-        auth_token = self.user_oauth.get_token()
+        auth_token = self.auth.get_token()
         client_config = DriveClientConfig(api_key=API_KEY)
         auth_client = DriveClient(client_config, auth_token=auth_token)
         scanner = FolderScanner(auth_client)
@@ -356,7 +344,7 @@ class SyncApp:
         print("  (If browser doesn't open, check your terminal)")
         print()
 
-        if self.user_oauth.sign_in():
+        if self.auth.sign_in():
             print("  Signed in successfully!")
             # Recreate sync with new token
             self._refresh_sync_token()
@@ -367,7 +355,7 @@ class SyncApp:
 
     def handle_signout(self):
         """Handle Google sign-out."""
-        self.user_oauth.sign_out()
+        self.auth.sign_out()
         # Recreate sync without user token (falls back to admin or anonymous)
         self._refresh_sync_token()
         print("\n  Signed out of Google.")
@@ -380,19 +368,19 @@ class SyncApp:
         Returns True if a folder was added successfully.
         """
         # Require sign-in for custom folders (need OAuth to access user's Drive)
-        if not self.user_oauth.is_signed_in:
+        if not self.auth.is_signed_in:
             print("\n  Please sign in to Google first to add custom folders.")
             print("  Custom folders require access to your Google Drive.")
             wait_with_skip(3)
             return False
 
         # Create a client with user's OAuth token for validation
-        auth_token = self.user_oauth.get_token()
+        auth_token = self.auth.get_token()
         client_config = DriveClientConfig(api_key=API_KEY)
         auth_client = DriveClient(client_config, auth_token=auth_token)
 
         # Show add folder screen
-        folder_id, folder_name = show_add_custom_folder(auth_client, self.user_oauth)
+        folder_id, folder_name = show_add_custom_folder(auth_client, self.auth)
 
         if not folder_id:
             return False
@@ -436,18 +424,10 @@ class SyncApp:
         return True
 
     def _refresh_sync_token(self):
-        """Recreate FolderSync with current auth token."""
-        auth_token = None
-        if self.user_oauth.is_signed_in:
-            auth_token = self.user_oauth.get_token()
-        else:
-            admin_auth = OAuthManager()
-            if admin_auth.is_available and admin_auth.is_configured:
-                auth_token = admin_auth.get_token()
-
+        """Recreate FolderSync with current auth token getter."""
         self.sync = FolderSync(
             self.client,
-            auth_token=auth_token,
+            auth_token=self.auth.get_token_getter(),
             delete_videos=self.user_settings.delete_videos
         )
 
@@ -478,7 +458,7 @@ class SyncApp:
             return
 
         # Need user OAuth for scanning
-        if not self.user_oauth.is_signed_in:
+        if not self.auth.is_signed_in:
             print("\n  Cannot scan custom folders: not signed in to Google.")
             print("  Sign in first to download from custom folders.")
             wait_with_skip(3)
@@ -491,7 +471,7 @@ class SyncApp:
         print("=" * 50)
 
         # Create scanner with user's OAuth
-        auth_token = self.user_oauth.get_token()
+        auth_token = self.auth.get_token()
         client_config = DriveClientConfig(api_key=API_KEY)
         auth_client = DriveClient(client_config, auth_token=auth_token)
         scanner = FolderScanner(auth_client)
@@ -580,7 +560,7 @@ class SyncApp:
         print_header()
 
         # First-run OAuth prompt (only shown once)
-        if not self.user_settings.oauth_prompted and self.user_oauth.is_available:
+        if not self.user_settings.oauth_prompted and self.auth.is_available:
             self.user_settings.oauth_prompted = True
             self.user_settings.save()
 
@@ -614,7 +594,7 @@ class SyncApp:
             action, value, menu_pos = show_main_menu(
                 self.folders, self.user_settings, selected_index,
                 get_download_path(), combined_drives, cache=menu_cache,
-                user_oauth=self.user_oauth
+                auth=self.auth
             )
             selected_index = menu_pos  # Always preserve menu position
 

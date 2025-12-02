@@ -241,7 +241,7 @@ def show_main_menu(
     download_path: Path = None,
     drives_config: DrivesConfig = None,
     cache: MainMenuCache = None,
-    user_oauth=None
+    auth=None
 ) -> tuple[str, str | int | None, int]:
     """
     Show main menu and get user selection.
@@ -253,7 +253,7 @@ def show_main_menu(
         download_path: Path to download folder for sync status calculation
         drives_config: Drive configuration with group information
         cache: Pre-computed stats cache (if None, will compute fresh)
-        user_oauth: UserOAuthManager instance for checking sign-in state
+        auth: AuthManager instance for checking sign-in state
 
     Returns tuple of (action, value, menu_position):
         - ("quit", None, pos) - user wants to quit
@@ -363,8 +363,8 @@ def show_main_menu(
     menu.add_item(MenuItem("Add Custom Folder", hotkey="A", value=("add_custom", None), description="Add your own Google Drive folder"))
 
     # Google sign-in/sign-out option
-    if user_oauth and user_oauth.is_signed_in:
-        email = user_oauth.get_user_email()
+    if auth and auth.is_signed_in:
+        email = auth.user_email
         label = f"Sign out ({email})" if email else "Sign out of Google"
         menu.add_item(MenuItem(label, hotkey="G", value=("signout", None), description="Remove saved Google credentials"))
     else:
@@ -702,7 +702,7 @@ def show_oauth_prompt() -> bool:
             return False
 
 
-def show_add_custom_folder(client, user_oauth) -> tuple[str | None, str | None]:
+def show_add_custom_folder(client, auth=None) -> tuple[str | None, str | None]:
     """
     Show the Add Custom Folder screen.
 
@@ -711,7 +711,7 @@ def show_add_custom_folder(client, user_oauth) -> tuple[str | None, str | None]:
 
     Args:
         client: DriveClient instance with user's OAuth token
-        user_oauth: UserOAuthManager to check/get credentials
+        auth: AuthManager instance (reserved for future use)
 
     Returns:
         Tuple of (folder_id, folder_name) if successful, (None, None) if cancelled

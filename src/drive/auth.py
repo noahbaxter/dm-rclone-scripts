@@ -6,7 +6,7 @@ Handles Google OAuth 2.0 flow for the Changes API.
 
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 # OAuth imports are optional (only needed for admin script)
 try:
@@ -317,3 +317,142 @@ class UserOAuthManager:
                 f.write(creds.to_json())
         except Exception:
             pass
+
+
+class AuthManager:
+    """
+    Unified authentication manager for DM Chart Sync.
+
+    Provides a single interface for all OAuth operations:
+    - User authentication (preferred, uses user's quota)
+    - Admin/dev authentication (fallback, for testing)
+
+    Usage:
+        auth = AuthManager()
+
+        # For downloads - pass the getter for auto-refresh
+        downloader = FileDownloader(auth_token=auth.get_token_getter())
+
+        # For UI
+        if auth.is_signed_in:
+            print(f"Signed in as {auth.user_email}")
+        else:
+            auth.sign_in()
+    """
+
+    def __init__(self, token_path: Optional[Path] = None):
+        """
+        Initialize unified auth manager.
+
+        Args:
+            token_path: Path for user token (default: .dm-sync/token.json)
+        """
+        self._user_oauth = UserOAuthManager(token_path=token_path)
+        self._admin_oauth: Optional[OAuthManager] = None
+
+    def _get_admin_oauth(self) -> OAuthManager:
+        """Lazy-load admin OAuth manager."""
+        if self._admin_oauth is None:
+            self._admin_oauth = OAuthManager()
+        return self._admin_oauth
+
+    # -------------------------------------------------------------------------
+    # Token access (for downloads)
+    # -------------------------------------------------------------------------
+
+    def get_token(self) -> Optional[str]:
+        """
+        Get the best available access token.
+
+        Priority: user token > admin token > None
+
+        This method handles token refresh automatically.
+
+        Returns:
+            Access token string or None if not authenticated
+        """
+        # Try user token first (preferred - uses their quota)
+        if self._user_oauth.is_signed_in:
+            token = self._user_oauth.get_token()
+            if token:
+                return token
+
+        # Fall back to admin token (dev/testing only)
+        admin = self._get_admin_oauth()
+        if admin.is_available and admin.is_configured:
+            return admin.get_token()
+
+        return None
+
+    def get_token_getter(self) -> Optional[Callable[[], Optional[str]]]:
+        """
+        Get a callable that returns fresh tokens (for long-running downloads).
+
+        Pass this to FileDownloader instead of a static token string
+        to enable automatic token refresh during long downloads.
+
+        Returns:
+            Callable that returns current token, or None if not authenticated
+        """
+        if self._user_oauth.is_signed_in:
+            return self._user_oauth.get_token
+
+        admin = self._get_admin_oauth()
+        if admin.is_available and admin.is_configured:
+            return admin.get_token
+
+        return None
+
+    @property
+    def has_auth(self) -> bool:
+        """Check if any authentication is available."""
+        if self._user_oauth.is_signed_in:
+            return True
+        admin = self._get_admin_oauth()
+        return admin.is_available and admin.is_configured
+
+    # -------------------------------------------------------------------------
+    # User authentication (sign in/out UI)
+    # -------------------------------------------------------------------------
+
+    @property
+    def is_signed_in(self) -> bool:
+        """Check if user is signed in."""
+        return self._user_oauth.is_signed_in
+
+    @property
+    def is_available(self) -> bool:
+        """Check if OAuth libraries are available."""
+        return self._user_oauth.is_available
+
+    def sign_in(self) -> bool:
+        """
+        Interactive sign-in flow. Opens browser for user to authorize.
+
+        Returns:
+            True if sign-in successful
+        """
+        return self._user_oauth.sign_in()
+
+    def sign_out(self):
+        """Sign out the current user."""
+        self._user_oauth.sign_out()
+
+    @property
+    def user_email(self) -> Optional[str]:
+        """Get signed-in user's email for display."""
+        return self._user_oauth.get_user_email()
+
+    # -------------------------------------------------------------------------
+    # Admin authentication (for manifest generation, dev tools)
+    # -------------------------------------------------------------------------
+
+    @property
+    def admin_oauth(self) -> OAuthManager:
+        """
+        Access admin OAuth manager directly.
+
+        Use this for admin operations like manifest generation
+        that require the admin credentials.
+        """
+        return self._get_admin_oauth()

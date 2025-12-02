@@ -10,6 +10,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, Optional, Union
 
 from ..constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS
 from ..file_ops import find_unexpected_files_with_sizes
@@ -480,7 +481,12 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
 class FolderSync:
     """Handles syncing folders from Google Drive to local disk."""
 
-    def __init__(self, client: DriveClient, auth_token: str = None, delete_videos: bool = True):
+    def __init__(
+        self,
+        client: DriveClient,
+        auth_token: Optional[Union[str, Callable[[], Optional[str]]]] = None,
+        delete_videos: bool = True
+    ):
         self.client = client
         self.downloader = FileDownloader(auth_token=auth_token, delete_videos=delete_videos)
 

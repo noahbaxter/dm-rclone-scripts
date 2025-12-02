@@ -16,7 +16,7 @@ import threading
 import time
 import zipfile
 from pathlib import Path
-from typing import Callable, Optional, Tuple, List
+from typing import Callable, Optional, Tuple, List, Union
 from dataclasses import dataclass
 
 import aiohttp
@@ -527,7 +527,7 @@ class FileDownloader:
         max_retries: int = 3,
         timeout: Tuple[int, int] = (10, 60),
         chunk_size: int = 32768,
-        auth_token: Optional[str] = None,
+        auth_token: Optional[Union[str, Callable[[], Optional[str]]]] = None,
         delete_videos: bool = True,
     ):
         """
@@ -538,15 +538,22 @@ class FileDownloader:
             max_retries: Number of retry attempts per file
             timeout: Request timeout (connect, read)
             chunk_size: Download chunk size in bytes
-            auth_token: Optional OAuth token for authenticated downloads
+            auth_token: OAuth token string OR callable that returns fresh token
+                        (callable allows token refresh for long downloads)
             delete_videos: Whether to delete video files from extracted archives
         """
         self.max_workers = max_workers
         self.max_retries = max_retries
         self.timeout = aiohttp.ClientTimeout(connect=timeout[0], total=timeout[1] + timeout[0])
         self.chunk_size = chunk_size
-        self.auth_token = auth_token
+        self._auth_token = auth_token
         self.delete_videos = delete_videos
+
+    def _get_auth_token(self) -> Optional[str]:
+        """Get current auth token, calling getter if it's a callable."""
+        if callable(self._auth_token):
+            return self._auth_token()
+        return self._auth_token
 
     async def _download_file_async(
         self,
@@ -582,9 +589,10 @@ class FileDownloader:
                                 continue
 
                             # Last attempt - try authenticated download if available
-                            if self.auth_token:
+                            auth_token = self._get_auth_token()
+                            if auth_token:
                                 api_url = f"{self.API_DOWNLOAD_URL.format(file_id=task.file_id)}&acknowledgeAbuse=true"
-                                headers = {"Authorization": f"Bearer {self.auth_token}"}
+                                headers = {"Authorization": f"Bearer {auth_token}"}
                                 async with session.get(api_url, headers=headers) as auth_response:
                                     auth_response.raise_for_status()
                                     return await self._write_response(auth_response, task, progress_tracker)
@@ -610,27 +618,37 @@ class FileDownloader:
                     )
 
                 except aiohttp.ClientResponseError as e:
-                    if e.status == 403:
-                        return DownloadResult(
-                            success=False,
-                            file_path=task.local_path,
-                            message=f"SKIP (access denied): {display_name}",
-                        )
-                    # 401 = auth required - try OAuth if available
-                    if e.status == 401 and self.auth_token:
+                    # 401/403 can be genuine permission issues OR rate limiting in disguise
+                    # Try OAuth if available, with backoff
+                    auth_token = self._get_auth_token()
+                    if e.status in (401, 403) and auth_token:
                         try:
+                            # Brief backoff before OAuth attempt (rate limit mitigation)
+                            await asyncio.sleep(0.5 * (attempt + 1))
                             api_url = f"{self.API_DOWNLOAD_URL.format(file_id=task.file_id)}&acknowledgeAbuse=true"
-                            headers = {"Authorization": f"Bearer {self.auth_token}"}
+                            headers = {"Authorization": f"Bearer {auth_token}"}
                             async with session.get(api_url, headers=headers) as auth_response:
                                 auth_response.raise_for_status()
                                 return await self._write_response(auth_response, task, progress_tracker)
                         except aiohttp.ClientResponseError as auth_e:
-                            # OAuth also failed
+                            # OAuth also failed - check if it's retryable
+                            # 429/5xx are definitely rate limits, 403 often is too
+                            is_retryable = auth_e.status in (403, 429) or 500 <= auth_e.status < 600
                             return DownloadResult(
                                 success=False,
                                 file_path=task.local_path,
-                                message=f"ERR (auth failed): {display_name}",
+                                message=f"ERR (auth failed, HTTP {auth_e.status}): {display_name}",
+                                retryable=is_retryable,
                             )
+                    # No OAuth or non-auth error
+                    if e.status == 403:
+                        # 403 without OAuth could still be rate limiting - mark retryable
+                        return DownloadResult(
+                            success=False,
+                            file_path=task.local_path,
+                            message=f"ERR (HTTP 403): {display_name}",
+                            retryable=True,
+                        )
                     if attempt < self.max_retries - 1:
                         await asyncio.sleep(0.5 * (attempt + 1))
                         continue
@@ -998,8 +1016,9 @@ class FileDownloader:
                 if cancelled:
                     print(f"  Cancelled. Downloaded {downloaded} files ({progress.completed_charts} complete charts).")
 
-        # Print helpful guidance for auth failures
-        if auth_failures > 0:
+        # Print helpful guidance for auth failures only if no retries pending
+        # If we have retryable tasks, wait until after retries to show guidance
+        if auth_failures > 0 and rate_limited == 0:
             print()
             print(f"  ⚠ {auth_failures} files failed due to access restrictions.")
             print()
