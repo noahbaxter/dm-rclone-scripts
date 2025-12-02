@@ -9,9 +9,8 @@ manifest, eliminating the need for users to scan Google Drive.
 import argparse
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
-
-import requests
 
 from src import (
     DriveClient,
@@ -34,10 +33,12 @@ from src import (
     extract_subfolders_from_manifest,
     compute_main_menu_cache,
     format_size,
+    TeeOutput,
+    fetch_manifest,
     # Paths
+    get_data_dir,
     get_settings_path,
     get_token_path,
-    get_manifest_path,
     get_local_manifest_path,
     get_download_path,
     get_drives_config_path,
@@ -52,37 +53,6 @@ from src.drive.client import DriveClientConfig
 # ============================================================================
 
 API_KEY = os.environ.get("GOOGLE_API_KEY", "")
-MANIFEST_URL = "https://github.com/noahbaxter/dm-rclone-scripts/releases/download/manifest/manifest.json"
-
-
-def fetch_manifest(use_local: bool = False) -> dict:
-    """
-    Fetch folder manifest.
-
-    Args:
-        use_local: If True, only read from local manifest.json (skip remote)
-
-    Returns:
-        Manifest data as dict
-    """
-    local_path = get_manifest_path()
-
-    if not use_local:
-        # Try remote first
-        try:
-            response = requests.get(MANIFEST_URL, timeout=10)
-            response.raise_for_status()
-            return response.json()
-        except Exception:
-            pass
-
-    # Use local manifest
-    if local_path.exists():
-        manifest = Manifest.load(local_path)
-        return manifest.to_dict()
-
-    print("Warning: Could not load folder manifest.\n")
-    return {"folders": []}
 
 
 # ============================================================================
@@ -655,6 +625,13 @@ def main():
         help="Use local manifest.json instead of fetching from GitHub"
     )
     args = parser.parse_args()
+
+    # Always log to .dm-sync/logs/YYYY-MM-DD.log
+    logs_dir = get_data_dir() / "logs"
+    logs_dir.mkdir(exist_ok=True)
+    log_path = logs_dir / f"{datetime.now().strftime('%Y-%m-%d')}.log"
+    tee = TeeOutput(log_path)
+    sys.stdout = tee
 
     # Migrate legacy files from old locations to .dm-sync/
     # Must run BEFORE creating SyncApp so paths resolve correctly

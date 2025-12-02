@@ -6,9 +6,9 @@ a pre-built manifest approach that eliminates API calls for end users.
 """
 
 # Core modules
-from .manifest import Manifest
+from .manifest import Manifest, fetch_manifest
 from .config import DrivesConfig, UserSettings, DriveConfig, CustomFolders, extract_subfolders_from_manifest
-from .utils import format_size, format_duration, print_progress, clear_screen, set_terminal_size
+from .utils import format_size, format_duration, print_progress, clear_screen, set_terminal_size, TeeOutput
 from .paths import (
     get_app_dir,
     get_bundle_dir,
@@ -34,6 +34,7 @@ from .ui import print_header, show_main_menu, show_subfolder_settings, Colors, c
 __all__ = [
     # Core
     "Manifest",
+    "fetch_manifest",
     "DrivesConfig",
     "UserSettings",
     "DriveConfig",
@@ -44,6 +45,7 @@ __all__ = [
     "print_progress",
     "clear_screen",
     "set_terminal_size",
+    "TeeOutput",
     # Paths
     "get_app_dir",
     "get_bundle_dir",

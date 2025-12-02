@@ -14,7 +14,7 @@ from typing import Callable, Optional, Union
 
 from ..constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS
 from ..file_ops import find_unexpected_files_with_sizes
-from ..utils import format_size, format_duration, print_progress, sanitize_path
+from ..utils import format_size, format_duration, print_progress, print_long_path_warning, sanitize_path
 from ..drive import DriveClient, FolderScanner
 from ..ui.keyboard import wait_with_skip
 from .downloader import FileDownloader, read_checksum, read_checksum_data, is_archive_file, get_folder_size
@@ -527,9 +527,13 @@ class FolderSync:
                     print(f"  Filtered out {filtered_count} files from disabled subfolders")
 
             print(f"  Using manifest ({len(manifest_files)} files)...")
-            tasks, skipped = self.downloader.filter_existing(manifest_files, folder_path)
+            tasks, skipped, long_paths = self.downloader.filter_existing(manifest_files, folder_path)
             scan_time = time.time() - scan_start
             print(f"  Comparison completed in {format_duration(scan_time)} (0 API calls)")
+
+            # Warn about long paths on Windows
+            if long_paths:
+                print_long_path_warning(len(long_paths))
         else:
             # No manifest - need to scan (shouldn't happen with official folders)
             print(f"  Scanning folder...")
@@ -544,11 +548,15 @@ class FolderSync:
             scan_time = time.time() - scan_start
             print(f"  Scan completed in {format_duration(scan_time)}")
 
-            tasks, skipped = self.downloader.filter_existing(
+            tasks, skipped, long_paths = self.downloader.filter_existing(
                 [{"id": f["id"], "path": f["path"], "size": f["size"]} for f in files if not f["skip"]],
                 folder_path
             )
             skipped += sum(1 for f in files if f["skip"])
+
+            # Warn about long paths on Windows
+            if long_paths:
+                print_long_path_warning(len(long_paths))
 
         if not tasks and not skipped:
             print(f"  No files found or error accessing folder")

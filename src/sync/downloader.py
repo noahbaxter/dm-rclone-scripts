@@ -27,6 +27,10 @@ from ..file_ops import file_exists_with_size
 from ..utils import sanitize_path
 from .progress import ProgressTracker
 
+# Windows MAX_PATH limit (260 chars including null terminator)
+# Paths longer than this fail unless long path support is enabled in registry
+WINDOWS_MAX_PATH = 260
+
 
 def get_certifi_path() -> str:
     """Get path to certifi CA bundle, handling PyInstaller bundles."""
@@ -55,9 +59,9 @@ except (ImportError, LookupError):
     HAS_RAR_LIB = False
 
 # Check for CLI tools as fallback for RAR extraction
-# Priority: unrar (fastest) > 7z (common on Windows) > unar (macOS)
+# Priority: unrar (fastest) > 7z/NanaZipC (common on Windows) > unar (macOS)
 RAR_CLI_TOOL = None
-for tool in ["unrar", "7z", "unar"]:
+for tool in ["unrar", "7z", "NanaZipC", "unar"]:
     if shutil.which(tool):
         RAR_CLI_TOOL = tool
         break
@@ -297,14 +301,14 @@ def extract_archive(archive_path: Path, dest_folder: Path) -> Tuple[bool, str]:
                 )
                 if result.returncode != 0:
                     return False, f"unrar failed: {result.stderr}"
-            elif RAR_CLI_TOOL == "7z":
-                # Use 7-Zip CLI (common on Windows)
+            elif RAR_CLI_TOOL in ("7z", "NanaZipC"):
+                # Use 7-Zip or NanaZip CLI (common on Windows)
                 result = subprocess.run(
-                    ["7z", "x", str(archive_path), f"-o{dest_folder}", "-y"],
+                    [RAR_CLI_TOOL, "x", str(archive_path), f"-o{dest_folder}", "-y"],
                     capture_output=True, text=True
                 )
                 if result.returncode != 0:
-                    return False, f"7z failed: {result.stderr}"
+                    return False, f"{RAR_CLI_TOOL} failed: {result.stderr}"
             elif RAR_CLI_TOOL == "unar":
                 # Use unar CLI (macOS)
                 result = subprocess.run(
@@ -314,7 +318,13 @@ def extract_archive(archive_path: Path, dest_folder: Path) -> Tuple[bool, str]:
                 if result.returncode != 0:
                     return False, f"unar failed: {result.stderr}"
             else:
-                return False, "RAR support unavailable (install 7-Zip, WinRAR, or unar)"
+                # Platform-specific install instructions
+                if os.name == 'nt':
+                    return False, "RAR support unavailable. Install 7-Zip from https://7-zip.org and add to PATH"
+                elif sys.platform == 'darwin':
+                    return False, "RAR support unavailable. Install unar: brew install unar"
+                else:
+                    return False, "RAR support unavailable. Install unrar: sudo apt install unrar (or equivalent)"
         else:
             return False, f"Unknown archive type: {ext}"
         return True, ""
@@ -1040,7 +1050,7 @@ class FileDownloader:
     def filter_existing(
         files: List[dict],
         local_base: Path,
-    ) -> Tuple[List[DownloadTask], int]:
+    ) -> Tuple[List[DownloadTask], int, List[str]]:
         """
         Filter files that already exist locally.
 
@@ -1052,10 +1062,13 @@ class FileDownloader:
             local_base: Base path for local files
 
         Returns:
-            Tuple of (tasks_to_download, skipped_count)
+            Tuple of (tasks_to_download, skipped_count, long_paths)
+            long_paths: List of paths that exceed Windows MAX_PATH (only on Windows)
         """
         to_download = []
         skipped = 0
+        long_paths = []
+        is_windows = os.name == 'nt'
 
         for f in files:
             # Sanitize path for Windows-illegal characters (*, ?, ", <, >, |, :)
@@ -1070,6 +1083,12 @@ class FileDownloader:
                 local_path = local_base / file_path
                 chart_folder = local_path.parent
 
+                # Check for long path on Windows
+                download_path = chart_folder / f"_download_{file_name}"
+                if is_windows and len(str(download_path)) >= WINDOWS_MAX_PATH:
+                    long_paths.append(file_path)
+                    continue
+
                 stored_md5 = read_checksum(chart_folder, archive_name=file_name)
                 if stored_md5 and stored_md5 == file_md5:
                     # Already extracted with matching checksum
@@ -1077,7 +1096,6 @@ class FileDownloader:
                 else:
                     # Need to download and extract
                     # Download to temp location within chart folder
-                    download_path = chart_folder / f"_download_{file_name}"
                     to_download.append(DownloadTask(
                         file_id=f["id"],
                         local_path=download_path,
@@ -1088,6 +1106,12 @@ class FileDownloader:
             else:
                 # Regular file: check if exists with matching size
                 local_path = local_base / file_path
+
+                # Check for long path on Windows
+                if is_windows and len(str(local_path)) >= WINDOWS_MAX_PATH:
+                    long_paths.append(file_path)
+                    continue
+
                 if file_exists_with_size(local_path, file_size):
                     skipped += 1
                 else:
@@ -1098,4 +1122,4 @@ class FileDownloader:
                         md5=file_md5,
                     ))
 
-        return to_download, skipped
+        return to_download, skipped, long_paths
