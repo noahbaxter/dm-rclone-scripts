@@ -52,7 +52,8 @@ class TeeOutput:
                 # Skip empty lines and lines that are just carriage return overwrites
                 stripped = line.rstrip()
                 if stripped and not stripped.startswith('\r'):
-                    self.log_file.write(stripped + '\n')
+                    timestamp = datetime.now().strftime("[%H:%M:%S]")
+                    self.log_file.write(f"{timestamp} {stripped}\n")
 
         # Handle \r (carriage return) - only keep the last version
         if '\r' in self._line_buffer:
@@ -67,7 +68,8 @@ class TeeOutput:
     def close(self):
         # Flush any remaining buffer
         if self._line_buffer.strip() and not self._skip_regex.search(self._line_buffer):
-            self.log_file.write(self._line_buffer.rstrip() + '\n')
+            timestamp = datetime.now().strftime("[%H:%M:%S]")
+            self.log_file.write(f"{timestamp} {self._line_buffer.rstrip()}\n")
         self.log_file.close()
 
 

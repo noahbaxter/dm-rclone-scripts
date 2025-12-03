@@ -12,6 +12,7 @@ import ssl
 import sys
 import shutil
 import signal
+import subprocess
 import threading
 import time
 import zipfile
@@ -58,16 +59,62 @@ try:
 except (ImportError, LookupError):
     HAS_RAR_LIB = False
 
-# Check for CLI tools as fallback for RAR extraction
-# Priority: unrar (fastest) > 7z/NanaZipC (common on Windows) > unar (macOS)
-RAR_CLI_TOOL = None
-for tool in ["unrar", "7z", "NanaZipC", "unar"]:
+# Detect universal archive CLI tools (can handle ZIP, 7z, RAR, and more)
+# Priority: 7z (most common on Windows) > NanaZipC (Windows alt) > unar (macOS/Linux)
+UNIVERSAL_CLI_TOOL = None
+for tool in ["7z", "NanaZipC", "unar"]:
     if shutil.which(tool):
-        RAR_CLI_TOOL = tool
+        UNIVERSAL_CLI_TOOL = tool
         break
+
+# Detect RAR-specific CLI tool (faster than universal tools for RAR files)
+UNRAR_CLI = shutil.which("unrar")
 
 # Checksum file for tracking archive chart state
 CHECKSUM_FILE = "check.txt"
+
+
+def _run_extract_cmd(cmd: list, tool_name: str) -> Tuple[bool, str]:
+    """Run extraction command with encoding-safe output handling."""
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            encoding='utf-8',
+            errors='replace'  # Replace invalid bytes with replacement char
+        )
+        if result.returncode != 0:
+            return False, f"{tool_name} failed: {result.stderr.strip()}"
+        return True, ""
+    except Exception as e:
+        return False, f"{tool_name} error: {e}"
+
+
+def _extract_with_cli(archive_path: Path, dest_folder: Path) -> Tuple[bool, str]:
+    """Extract any archive using CLI tools (encoding-safe fallback)."""
+    ext = archive_path.suffix.lower()
+
+    # For RAR files, prefer dedicated unrar tool (faster)
+    if ext == ".rar" and UNRAR_CLI:
+        return _run_extract_cmd(
+            [UNRAR_CLI, "x", "-o+", str(archive_path), str(dest_folder) + "/"],
+            "unrar"
+        )
+
+    # Universal tools handle ZIP, 7z, RAR, and more
+    if UNIVERSAL_CLI_TOOL in ("7z", "NanaZipC"):
+        return _run_extract_cmd(
+            [UNIVERSAL_CLI_TOOL, "x", str(archive_path), f"-o{dest_folder}", "-y"],
+            UNIVERSAL_CLI_TOOL
+        )
+    elif UNIVERSAL_CLI_TOOL == "unar":
+        return _run_extract_cmd(
+            ["unar", "-f", "-o", str(dest_folder), str(archive_path)],
+            "unar"
+        )
+
+    return False, "No CLI extraction tool available"
+
 
 # Platform-specific imports for ESC detection
 if os.name == 'nt':
@@ -273,63 +320,57 @@ def get_folder_size(folder_path: Path) -> int:
 
 def extract_archive(archive_path: Path, dest_folder: Path) -> Tuple[bool, str]:
     """
-    Extract archive to destination folder.
+    Extract archive with automatic fallback to CLI tools on errors.
+
+    Strategy:
+    1. Try Python library first (faster, no subprocess overhead)
+    2. On ANY failure, immediately fall back to CLI tools
+    3. CLI tools handle encoding issues gracefully via errors='replace'
 
     Returns (success, error_message).
     """
     ext = archive_path.suffix.lower()
+    library_error = None
+
+    # Try Python library first (faster than subprocess)
     try:
         if ext == ".zip":
             with zipfile.ZipFile(archive_path, 'r') as zf:
                 zf.extractall(dest_folder)
-        elif ext == ".7z":
-            if not HAS_7Z:
-                return False, "py7zr not installed (pip install py7zr)"
+            return True, ""
+        elif ext == ".7z" and HAS_7Z:
             with py7zr.SevenZipFile(archive_path, 'r') as sz:
                 sz.extractall(dest_folder)
-        elif ext == ".rar":
-            import subprocess
-            if HAS_RAR_LIB:
-                # Use UnRAR library (fastest)
-                with unrar_rarfile.RarFile(str(archive_path)) as rf:
-                    rf.extractall(str(dest_folder))
-            elif RAR_CLI_TOOL == "unrar":
-                # Use unrar CLI
-                result = subprocess.run(
-                    ["unrar", "x", "-o+", str(archive_path), str(dest_folder) + "/"],
-                    capture_output=True, text=True
-                )
-                if result.returncode != 0:
-                    return False, f"unrar failed: {result.stderr}"
-            elif RAR_CLI_TOOL in ("7z", "NanaZipC"):
-                # Use 7-Zip or NanaZip CLI (common on Windows)
-                result = subprocess.run(
-                    [RAR_CLI_TOOL, "x", str(archive_path), f"-o{dest_folder}", "-y"],
-                    capture_output=True, text=True
-                )
-                if result.returncode != 0:
-                    return False, f"{RAR_CLI_TOOL} failed: {result.stderr}"
-            elif RAR_CLI_TOOL == "unar":
-                # Use unar CLI (macOS)
-                result = subprocess.run(
-                    ["unar", "-f", "-o", str(dest_folder), str(archive_path)],
-                    capture_output=True, text=True
-                )
-                if result.returncode != 0:
-                    return False, f"unar failed: {result.stderr}"
-            else:
-                # Platform-specific install instructions
-                if os.name == 'nt':
-                    return False, "RAR support unavailable. Install 7-Zip from https://7-zip.org and add to PATH"
-                elif sys.platform == 'darwin':
-                    return False, "RAR support unavailable. Install unar: brew install unar"
-                else:
-                    return False, "RAR support unavailable. Install unrar: sudo apt install unrar (or equivalent)"
-        else:
-            return False, f"Unknown archive type: {ext}"
-        return True, ""
+            return True, ""
+        elif ext == ".rar" and HAS_RAR_LIB:
+            with unrar_rarfile.RarFile(str(archive_path)) as rf:
+                rf.extractall(str(dest_folder))
+            return True, ""
     except Exception as e:
-        return False, str(e)
+        library_error = str(e)
+        # Fall through to CLI fallback
+
+    # CLI fallback (handles encoding issues gracefully)
+    cli_success, cli_error = _extract_with_cli(archive_path, dest_folder)
+    if cli_success:
+        return True, ""
+
+    # Both failed - check if we have any CLI tools available
+    if not UNIVERSAL_CLI_TOOL and not UNRAR_CLI:
+        # No CLI tools - provide platform-specific install guidance
+        if os.name == 'nt':
+            return False, "Install 7-Zip from https://7-zip.org and add to PATH"
+        elif sys.platform == 'darwin':
+            return False, "Install unar: brew install unar"
+        else:
+            return False, "Install p7zip: sudo apt install p7zip-full"
+
+    # CLI was available but failed - return most useful error
+    if cli_error and cli_error != "No CLI extraction tool available":
+        return False, cli_error
+    if library_error:
+        return False, library_error
+    return False, f"Failed to extract {ext} archive"
 
 
 def delete_video_files(folder_path: Path) -> int:
