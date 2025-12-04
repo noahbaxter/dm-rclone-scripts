@@ -45,7 +45,7 @@ from src import (
     migrate_legacy_files,
 )
 from src.ui.keyboard import wait_with_skip
-from src.sync.operations import count_purgeable_charts, clear_scan_cache
+from src.sync.operations import count_purgeable_charts, clear_scan_cache, repair_all_checksums
 from src.drive.client import DriveClientConfig
 
 # ============================================================================
@@ -159,6 +159,10 @@ class SyncApp:
         purge_all_folders(self.folders, get_download_path(), self.user_settings)
         clear_scan_cache()  # Invalidate filesystem cache after purge
         return True
+
+    def handle_repair(self):
+        """Repair check.txt files with missing/incorrect size data."""
+        repair_all_checksums(self.folders, get_download_path())
 
     def handle_configure_drive(self, folder_id: str):
         """Configure setlists for a specific drive, or show options for custom folders."""
@@ -580,6 +584,10 @@ class SyncApp:
             elif action == "purge":
                 self.handle_purge()
                 menu_cache = None  # Invalidate cache after purge
+
+            elif action == "repair":
+                self.handle_repair()
+                menu_cache = None  # Invalidate cache after repair
 
             elif action == "configure":
                 # Enter on a drive - go directly to configure that drive
