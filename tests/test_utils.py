@@ -4,7 +4,7 @@ Tests for utility functions.
 
 import pytest
 
-from src.utils import sanitize_filename, sanitize_path
+from src.utils import sanitize_filename, sanitize_path, dedupe_files_by_newest
 
 
 class TestSanitizeFilename:
@@ -68,6 +68,19 @@ class TestSanitizeFilename:
         """Multiple illegal chars in one filename."""
         assert sanitize_filename('What?: "Yes" <No>') == "What - 'Yes' -No-"
 
+    def test_control_characters_become_underscore(self):
+        """Control chars (0x00-0x1F, DEL) replaced with underscore."""
+        # Tab (0x09), newline (0x0A), carriage return (0x0D)
+        assert sanitize_filename("file\tname") == "file_name"
+        assert sanitize_filename("file\nname") == "file_name"
+        assert sanitize_filename("file\x00name") == "file_name"  # Null byte
+        assert sanitize_filename("file\x7fname") == "file_name"  # DEL
+
+    def test_fullwidth_unicode_passes_through(self):
+        """Fullwidth Unicode chars are valid filenames, pass unchanged."""
+        # Fullwidth colon U+FF1A - NOT the same as ASCII colon
+        assert sanitize_filename("Title：Subtitle") == "Title：Subtitle"
+
 
 class TestSanitizePath:
     """Tests for sanitize_path() - sanitizes each path component."""
@@ -93,6 +106,60 @@ class TestSanitizePath:
         """Path structure preserved, only filenames sanitized."""
         clean_path = "folder/subfolder/file.txt"
         assert sanitize_path(clean_path) == clean_path
+
+
+class TestDedupeFilesByNewest:
+    """Tests for dedupe_files_by_newest() - keeping newest version of duplicate paths."""
+
+    def test_keeps_newest_by_modified_date(self):
+        """Basic dedup keeps file with latest modified date."""
+        files = [
+            {"path": "song.zip", "modified": "2022-01-01T00:00:00Z", "md5": "old"},
+            {"path": "song.zip", "modified": "2023-01-01T00:00:00Z", "md5": "new"},
+        ]
+        result = dedupe_files_by_newest(files)
+        assert len(result) == 1
+        assert result[0]["md5"] == "new"
+
+    def test_trailing_space_treated_as_duplicate(self):
+        """
+        THE critical test for the re-download bug.
+
+        Manifest has two entries that differ only by trailing space in folder name:
+        - 'Artist /song.rar' (with trailing space, newer)
+        - 'Artist/song.rar' (without trailing space, older)
+
+        After sanitization these are the same path, so dedup should catch them.
+        """
+        files = [
+            {"path": "Artist /song.rar", "modified": "2023-01-01T00:00:00Z", "md5": "newer"},
+            {"path": "Artist/song.rar", "modified": "2022-01-01T00:00:00Z", "md5": "older"},
+        ]
+        result = dedupe_files_by_newest(files)
+        assert len(result) == 1
+        assert result[0]["md5"] == "newer"  # Keeps the newer one
+
+    def test_colon_treated_as_duplicate(self):
+        """Paths differing only by colon (sanitized to ' -') are duplicates."""
+        files = [
+            {"path": "Guitar Hero: Aerosmith/song.zip", "modified": "2023-01-01T00:00:00Z"},
+            {"path": "Guitar Hero - Aerosmith/song.zip", "modified": "2022-01-01T00:00:00Z"},
+        ]
+        result = dedupe_files_by_newest(files)
+        assert len(result) == 1
+
+    def test_different_paths_kept(self):
+        """Actually different paths are kept separately."""
+        files = [
+            {"path": "Artist1/song.zip", "modified": "2023-01-01T00:00:00Z"},
+            {"path": "Artist2/song.zip", "modified": "2022-01-01T00:00:00Z"},
+        ]
+        result = dedupe_files_by_newest(files)
+        assert len(result) == 2
+
+    def test_empty_list_returns_empty(self):
+        """Empty input returns empty output."""
+        assert dedupe_files_by_newest([]) == []
 
 
 if __name__ == "__main__":

@@ -320,6 +320,8 @@ def dedupe_files_by_newest(files: list) -> list:
     Deduplicate files with same path, keeping only newest version.
 
     Some charters upload multiple versions with same filename - we only want the newest.
+    Uses sanitized paths as keys so paths differing only by illegal chars (like trailing
+    spaces) are treated as duplicates.
 
     Args:
         files: List of file dicts with "path" and "modified" keys
@@ -330,7 +332,10 @@ def dedupe_files_by_newest(files: list) -> list:
     by_path = {}
     for f in files:
         path = f.get("path", "")
+        # Use sanitized path as key - paths that differ only by illegal chars
+        # (like trailing spaces) should be treated as duplicates
+        key = sanitize_path(path)
         modified = f.get("modified", "")
-        if path not in by_path or modified > by_path[path].get("modified", ""):
-            by_path[path] = f
+        if key not in by_path or modified > by_path[key].get("modified", ""):
+            by_path[key] = f
     return list(by_path.values())
