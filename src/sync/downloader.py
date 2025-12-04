@@ -32,6 +32,10 @@ from .progress import ProgressTracker
 # Paths longer than this fail unless long path support is enabled in registry
 WINDOWS_MAX_PATH = 260
 
+# Large file threshold for reducing download concurrency (500MB)
+# When downloading many large files, reduce parallelism to prevent bandwidth saturation
+LARGE_FILE_THRESHOLD = 500_000_000
+
 
 def get_certifi_path() -> str:
     """Get path to certifi CA bundle, handling PyInstaller bundles."""
@@ -270,6 +274,77 @@ def write_checksum(
 
     with open(checksum_path, "w") as f:
         json.dump(existing, f, indent=2)
+
+
+def repair_checksum_sizes(folder_path: Path) -> Tuple[int, int]:
+    """
+    Repair check.txt files with missing/incorrect size data.
+
+    Scans folder for check.txt files and updates them with actual sizes
+    calculated from the extracted content on disk.
+
+    Args:
+        folder_path: Base folder to scan (e.g., Sync Charts/Guitar Hero)
+
+    Returns:
+        Tuple of (repaired_count, total_checked)
+    """
+    repaired = 0
+    checked = 0
+
+    for checksum_file in folder_path.rglob(CHECKSUM_FILE):
+        chart_folder = checksum_file.parent
+        checked += 1
+
+        try:
+            with open(checksum_file) as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            continue
+
+        if "archives" not in data:
+            continue
+
+        modified = False
+        for archive_name, archive_info in data["archives"].items():
+            # Check if size is missing or zero
+            current_size = archive_info.get("size", 0)
+            if current_size > 0:
+                continue  # Already has valid size
+
+            # Calculate actual size from disk
+            # First, try to find the extracted folder by archive stem
+            archive_stem = Path(archive_name).stem
+            extracted_folder = chart_folder / archive_stem
+
+            # Also check for _download_ prefixed folder (old bug)
+            download_prefixed = chart_folder / f"_download_{archive_stem}"
+
+            # Calculate size from whichever folder exists
+            if extracted_folder.exists() and extracted_folder.is_dir():
+                actual_size = get_folder_size(extracted_folder)
+            elif download_prefixed.exists() and download_prefixed.is_dir():
+                actual_size = get_folder_size(download_prefixed)
+                # Rename the folder to fix the _download_ prefix issue
+                try:
+                    download_prefixed.rename(extracted_folder)
+                except OSError:
+                    pass  # Keep original name if rename fails
+            else:
+                # No extracted folder found, calculate from chart folder
+                # (for archives that extract flat without a subfolder)
+                actual_size = get_folder_size(chart_folder)
+
+            if actual_size > 0:
+                archive_info["size"] = actual_size
+                modified = True
+
+        if modified:
+            with open(checksum_file, "w") as f:
+                json.dump(data, f, indent=2)
+            repaired += 1
+
+    return repaired, checked
 
 
 def read_checksum_data(folder_path: Path) -> dict:
@@ -576,7 +651,7 @@ class FileDownloader:
         self,
         max_workers: int = 24,
         max_retries: int = 3,
-        timeout: Tuple[int, int] = (10, 60),
+        timeout: Tuple[int, int] = (10, 120),
         chunk_size: int = 32768,
         auth_token: Optional[Union[str, Callable[[], Optional[str]]]] = None,
         delete_videos: bool = True,
@@ -587,7 +662,7 @@ class FileDownloader:
         Args:
             max_workers: Max concurrent downloads
             max_retries: Number of retry attempts per file
-            timeout: Request timeout (connect, read)
+            timeout: Request timeout (connect, sock_read between chunks)
             chunk_size: Download chunk size in bytes
             auth_token: OAuth token string OR callable that returns fresh token
                         (callable allows token refresh for long downloads)
@@ -595,7 +670,9 @@ class FileDownloader:
         """
         self.max_workers = max_workers
         self.max_retries = max_retries
-        self.timeout = aiohttp.ClientTimeout(connect=timeout[0], total=timeout[1] + timeout[0])
+        # Use sock_read timeout instead of total - allows indefinite downloads as long as
+        # data keeps flowing. This prevents timeouts on large files (500MB+).
+        self.timeout = aiohttp.ClientTimeout(connect=timeout[0], sock_read=timeout[1])
         self.chunk_size = chunk_size
         self._auth_token = auth_token
         self.delete_videos = delete_videos
@@ -703,13 +780,21 @@ class FileDownloader:
                     if attempt < self.max_retries - 1:
                         await asyncio.sleep(0.5 * (attempt + 1))
                         continue
-                    # 5xx errors are server-side and may succeed on retry
-                    is_server_error = 500 <= e.status < 600
+                    # 5xx errors are server-side - log file_id for investigation
+                    # Mark as non-retryable to skip on this run (persistent failures indicate
+                    # corrupted/deleted files that won't succeed with more retries)
+                    if 500 <= e.status < 600:
+                        return DownloadResult(
+                            success=False,
+                            file_path=task.local_path,
+                            message=f"ERR (HTTP {e.status}): {display_name} [file_id={task.file_id}]",
+                            retryable=False,  # Skip persistent server errors
+                        )
                     return DownloadResult(
                         success=False,
                         file_path=task.local_path,
                         message=f"ERR (HTTP {e.status}): {display_name}",
-                        retryable=is_server_error,
+                        retryable=False,
                     )
 
                 except asyncio.CancelledError:
@@ -812,6 +897,16 @@ class FileDownloader:
         archive_stem = Path(archive_name).stem
         extracted_folder = chart_folder / archive_stem
 
+        # Rename archive to remove _download_ prefix BEFORE extraction
+        # This ensures unar/7z create folders with the correct name
+        if archive_path.name.startswith("_download_"):
+            clean_archive_path = chart_folder / archive_name
+            try:
+                archive_path.rename(clean_archive_path)
+                archive_path = clean_archive_path
+            except OSError:
+                pass  # Continue with original name if rename fails
+
         # Track archive size (download size)
         archive_size = task.size
 
@@ -863,6 +958,37 @@ class FileDownloader:
 
         return True, ""
 
+    def _cleanup_partial_downloads(self, tasks: List[DownloadTask]) -> int:
+        """
+        Clean up partial downloads after cancellation.
+
+        Removes files with _download_ prefix that weren't fully processed.
+        These are incomplete archive downloads that can't be resumed.
+
+        Args:
+            tasks: List of DownloadTask objects that were being processed
+
+        Returns:
+            Number of files cleaned up
+        """
+        cleaned = 0
+        for task in tasks:
+            # Only archives have the _download_ prefix
+            if task.is_archive and task.local_path.name.startswith("_download_"):
+                # Check both the original path and the renamed path (without prefix)
+                paths_to_check = [
+                    task.local_path,  # _download_archive.zip
+                    task.local_path.parent / task.local_path.name[10:],  # archive.zip (renamed but not extracted)
+                ]
+                for path in paths_to_check:
+                    if path.exists():
+                        try:
+                            path.unlink()
+                            cleaned += 1
+                        except Exception:
+                            pass  # Non-fatal
+        return cleaned
+
     async def _download_many_async(
         self,
         tasks: List[DownloadTask],
@@ -882,17 +1008,32 @@ class FileDownloader:
         cancelled = False
         loop = asyncio.get_event_loop()
 
-        semaphore = asyncio.Semaphore(self.max_workers)
+        # Reduce concurrency for large files to prevent bandwidth saturation
+        large_files = [t for t in tasks if t.size > LARGE_FILE_THRESHOLD]
+        if large_files:
+            effective_workers = min(self.max_workers, 8)
+        else:
+            effective_workers = self.max_workers
+
+        semaphore = asyncio.Semaphore(effective_workers)
+
+        # Limit extraction concurrency to prevent "too many open files" errors
+        # Extractions spawn subprocesses that open many file handles
+        extract_semaphore = threading.Semaphore(2)
+
+        def process_archive_limited(task: DownloadTask) -> Tuple[bool, str]:
+            """Wrapper to limit concurrent extractions."""
+            with extract_semaphore:
+                return self.process_archive(task)
 
         # Create SSL context using certifi's CA bundle
         # This is required for PyInstaller builds which don't have system certs
         ssl_context = ssl.create_default_context(cafile=get_certifi_path())
 
-        # Create connector with generous connection pooling
-        # For many small files, we want lots of concurrent connections
+        # Create connector with connection pooling scaled to effective workers
         connector = aiohttp.TCPConnector(
-            limit=self.max_workers * 2,  # Total connection pool
-            limit_per_host=self.max_workers,  # All to Google Drive
+            limit=effective_workers * 2,  # Total connection pool
+            limit_per_host=effective_workers,  # All to Google Drive
             ttl_dns_cache=300,
             keepalive_timeout=30,  # Reuse connections
             ssl=ssl_context,
@@ -939,9 +1080,10 @@ class FileDownloader:
 
                         if result.success:
                             # Process archive if needed (run in executor to not block)
+                            # Uses extract_semaphore to limit concurrent extractions
                             if task.is_archive:
                                 archive_success, archive_error = await loop.run_in_executor(
-                                    None, self.process_archive, task
+                                    None, process_archive_limited, task
                                 )
                                 if not archive_success:
                                     errors += 1
@@ -1066,6 +1208,10 @@ class FileDownloader:
                 progress.close()
                 if cancelled:
                     print(f"  Cancelled. Downloaded {downloaded} files ({progress.completed_charts} complete charts).")
+                    # Clean up partial downloads (files with _download_ prefix)
+                    cleaned = self._cleanup_partial_downloads(tasks)
+                    if cleaned > 0:
+                        print(f"  Cleaned up {cleaned} partial download(s).")
 
         # Print helpful guidance for auth failures only if no retries pending
         # If we have retryable tasks, wait until after retries to show guidance

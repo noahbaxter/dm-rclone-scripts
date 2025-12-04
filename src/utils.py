@@ -124,17 +124,18 @@ def parse_drive_folder_url(url_or_id: str) -> tuple[str | None, str | None]:
 # Filename sanitization (cross-platform)
 # ============================================================================
 
-# Illegal characters mapped to visually-similar fullwidth Unicode equivalents
+# Illegal characters mapped to safe alternatives
+# Using simple ASCII replacements instead of fullwidth Unicode (cleaner filenames)
 ILLEGAL_CHAR_MAP = {
-    "<": "＜",   # U+FF1C FULLWIDTH LESS-THAN SIGN
-    ">": "＞",   # U+FF1E FULLWIDTH GREATER-THAN SIGN
-    ":": "：",   # U+FF1A FULLWIDTH COLON
-    '"': "＂",   # U+FF02 FULLWIDTH QUOTATION MARK
-    "\\": "＼",  # U+FF3C FULLWIDTH REVERSE SOLIDUS
-    "/": "／",   # U+FF0F FULLWIDTH SOLIDUS
-    "|": "｜",   # U+FF5C FULLWIDTH VERTICAL LINE
-    "?": "？",   # U+FF1F FULLWIDTH QUESTION MARK
-    "*": "＊",   # U+FF0A FULLWIDTH ASTERISK
+    "<": "-",    # Less-than
+    ">": "-",    # Greater-than
+    ":": " -",   # Colon -> space-dash (e.g., "Guitar Hero: Aerosmith" -> "Guitar Hero - Aerosmith")
+    '"': "'",    # Double quote -> single quote
+    "\\": "-",   # Backslash
+    "/": "-",    # Forward slash
+    "|": "-",    # Pipe
+    "?": "",     # Question mark -> remove
+    "*": "",     # Asterisk -> remove
 }
 
 # Control characters (0x00-0x1F) and DEL (0x7F) - no visual equivalent, use _
@@ -312,3 +313,24 @@ def print_long_path_warning(count: int):
     print(f"  To fix: Enable long paths in Windows Registry:")
     print(f"    HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\FileSystem")
     print(f"    Set LongPathsEnabled to 1, then restart")
+
+
+def dedupe_files_by_newest(files: list) -> list:
+    """
+    Deduplicate files with same path, keeping only newest version.
+
+    Some charters upload multiple versions with same filename - we only want the newest.
+
+    Args:
+        files: List of file dicts with "path" and "modified" keys
+
+    Returns:
+        Deduplicated list with only newest version of each path
+    """
+    by_path = {}
+    for f in files:
+        path = f.get("path", "")
+        modified = f.get("modified", "")
+        if path not in by_path or modified > by_path[path].get("modified", ""):
+            by_path[path] = f
+    return list(by_path.values())
