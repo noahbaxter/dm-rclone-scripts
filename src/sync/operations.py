@@ -849,15 +849,19 @@ def find_extra_files(folder: dict, base_path: Path) -> list:
 
         if is_archive_file(file_name) and file_md5:
             # This is an archive file - check if it's been extracted
+            sanitized = sanitize_path(file_path)
             if "/" in file_path:
-                # Sanitize path to match actual folder name on disk
-                sanitized = sanitize_path(file_path)
                 parent = "/".join(sanitized.split("/")[:-1])
                 chart_folder = folder_path / parent
-                stored_md5 = read_checksum(chart_folder)
-                if stored_md5 == file_md5:
-                    # This archive has been extracted - mark folder as valid
-                    valid_archive_folders.add(chart_folder)
+            else:
+                # Root-level archive - check.txt is in folder root
+                chart_folder = folder_path
+            # Get original archive name (not lowercased) for check.txt lookup
+            archive_name = sanitized.split("/")[-1] if "/" in sanitized else sanitized
+            stored_md5 = read_checksum(chart_folder, archive_name)
+            if stored_md5 == file_md5:
+                # This archive has been extracted - mark folder as valid
+                valid_archive_folders.add(chart_folder)
 
     # Get all unexpected files
     all_extras = find_unexpected_files_with_sizes(folder_path, expected_paths)
@@ -932,7 +936,7 @@ class PurgeStats:
         return self.chart_size + self.extra_file_size + self.partial_size
 
 
-def count_purgeable_charts(folders: list, base_path: Path, user_settings=None) -> tuple[int, int]:
+def count_purgeable_files(folders: list, base_path: Path, user_settings=None) -> tuple[int, int]:
     """
     Count files that would be purged (backward-compatible wrapper).
 

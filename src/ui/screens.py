@@ -9,7 +9,7 @@ from pathlib import Path
 
 from ..utils import format_size, clear_screen, dedupe_files_by_newest
 from ..config import UserSettings, DrivesConfig, extract_subfolders_from_manifest
-from ..sync.operations import get_sync_status, count_purgeable_charts, SyncStatus
+from ..sync.operations import get_sync_status, count_purgeable_files, SyncStatus
 from ..stats import get_best_stats, get_scanner, get_overrides
 from .menu import Menu, MenuItem, MenuDivider, MenuGroupHeader, MenuResult, print_header
 from .colors import Colors
@@ -90,7 +90,6 @@ def format_colored_size(
 def format_sync_subtitle(
     status: SyncStatus,
     unit: str = "charts",
-    excess_charts: int = 0,
     excess_size: int = 0
 ) -> str:
     """
@@ -99,21 +98,20 @@ def format_sync_subtitle(
     Args:
         status: SyncStatus with chart/archive counts
         unit: "charts" or "archives"
-        excess_charts: Number of excess charts (purgeable, shown in red)
         excess_size: Size of excess data (purgeable, shown in red)
 
     Returns:
-        Formatted string like "Synced: 20 + 108/108 charts (1.6 GB + 4.2 GB/4.2 GB) | 100%"
-        Or if everything is purgeable: "Purgeable: 45 charts (1.5 GB)"
+        Formatted string like "Synced: 108/108 charts (4.2 GB + 1.6 GB/4.2 GB) | 100%"
+        Or if everything is purgeable: "Purgeable: 1.5 GB"
     """
     # If no enabled content but have excess, show purgeable-only format
     if status.total_charts == 0:
-        if excess_charts > 0:
-            return f"Purgeable: {Colors.RED}{excess_charts}{Colors.MUTED} {unit} ({Colors.RED}{format_size(excess_size)}{Colors.MUTED})"
+        if excess_size > 0:
+            return f"Purgeable: {Colors.RED}{format_size(excess_size)}{Colors.MUTED}"
         return ""
 
     pct = (status.synced_charts / status.total_charts * 100)
-    charts_str = format_colored_count(status.synced_charts, status.total_charts, excess=excess_charts)
+    charts_str = format_colored_count(status.synced_charts, status.total_charts)
 
     # If total_size is 0 but we have synced data, use synced_size as total
     # (handles manifests with missing size data, like Guitar Hero archives)
@@ -174,18 +172,17 @@ def compute_main_menu_cache(
     enabled_status = get_sync_status(folders, download_path, user_settings)
 
     # Calculate purge/excess count (charts from disabled drives/setlists)
-    purge_count, purge_size = count_purgeable_charts(folders, download_path, user_settings)
+    purge_count, purge_size = count_purgeable_files(folders, download_path, user_settings)
 
     # Format subtitle with excess shown in red
     cache.subtitle = format_sync_subtitle(
         enabled_status,
         unit="charts",
-        excess_charts=purge_count,
         excess_size=purge_size
     )
 
     if purge_count > 0:
-        cache.purge_desc = f"{Colors.RED}{purge_count} charts, {format_size(purge_size)}{Colors.MUTED}"
+        cache.purge_desc = f"{Colors.RED}{purge_count} files, {format_size(purge_size)}{Colors.MUTED}"
 
     # Calculate per-folder stats
     for folder in folders:
@@ -206,7 +203,7 @@ def compute_main_menu_cache(
         status = get_sync_status([folder], download_path, user_settings)
 
         # Get excess/purgeable count for this folder
-        folder_purge_count, folder_purge_size = count_purgeable_charts([folder], download_path, user_settings)
+        folder_purge_count, folder_purge_size = count_purgeable_files([folder], download_path, user_settings)
 
         # Show charts with excess prefix if applicable
         # Use "archives" for custom folders before extraction, "charts" after we've scanned actual content
@@ -570,16 +567,16 @@ def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_
         if not drive_enabled:
             # Drive is disabled - check for purgeable content
             if download_path:
-                excess_charts, excess_size = count_purgeable_charts([folder], download_path, user_settings)
+                excess_charts, excess_size = count_purgeable_files([folder], download_path, user_settings)
                 if excess_charts > 0:
-                    subtitle = f"DRIVE DISABLED - {Colors.RED}Purgeable: {excess_charts} charts ({format_size(excess_size)}){Colors.RESET}"
+                    subtitle = f"DRIVE DISABLED - {Colors.RED}Purgeable: {excess_charts} files ({format_size(excess_size)}){Colors.RESET}"
                 else:
                     subtitle = "DRIVE DISABLED"
             else:
                 subtitle = "DRIVE DISABLED"
         elif download_path:
             status = get_sync_status([folder], download_path, user_settings)
-            excess_charts, excess_size = count_purgeable_charts([folder], download_path, user_settings)
+            excess_charts, excess_size = count_purgeable_files([folder], download_path, user_settings)
 
             if status.total_charts > 0 or excess_charts > 0:
                 # Use "archives" for custom folders before extraction, "charts" after
@@ -590,7 +587,6 @@ def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_
                 subtitle = format_sync_subtitle(
                     status,
                     unit=unit,
-                    excess_charts=excess_charts,
                     excess_size=excess_size
                 )
 

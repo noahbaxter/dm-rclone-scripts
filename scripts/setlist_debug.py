@@ -10,7 +10,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from src.utils import format_size
 from src.constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS
 from src.ui.screens import extract_subfolders_from_manifest
-from src.sync.operations import count_purgeable_charts
+from src.sync.operations import count_purgeable_files
 from src.stats import get_best_stats
 
 
@@ -67,10 +67,10 @@ def main():
             status = "[DISABLED]" if in_disabled else "[ENABLED]"
             print(f"  {status} {subfolder.name}: {file_count} files, {format_size(size)}")
 
-    # Call actual count_purgeable_charts function
-    print(f"\nACTUAL count_purgeable_charts RESULT:")
+    # Call actual count_purgeable_files function
+    print(f"\nACTUAL count_purgeable_files RESULT:")
     print("-" * 70)
-    purgeable_count, purgeable_size = count_purgeable_charts([folder], path.parent, settings)
+    purgeable_count, purgeable_size = count_purgeable_files([folder], path.parent, settings)
     print(f"  {purgeable_count} files, {format_size(purgeable_size)}")
 
     # Show per-setlist breakdown

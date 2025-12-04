@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Trace through count_purgeable_charts logic step by step."""
+"""Trace through count_purgeable_files logic step by step."""
 
 import sys
 from pathlib import Path
@@ -33,7 +33,7 @@ def main():
     settings = load_settings_from_sync_path(path)
     folder_id = folder.get("folder_id", "")
 
-    print(f"\nTracing count_purgeable_charts for: {path}")
+    print(f"\nTracing count_purgeable_files for: {path}")
     print("=" * 70)
 
     # Basic info
