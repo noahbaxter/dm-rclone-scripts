@@ -45,7 +45,7 @@ from src import (
     migrate_legacy_files,
 )
 from src.ui.keyboard import wait_with_skip
-from src.sync.operations import count_purgeable_charts, clear_scan_cache, repair_all_checksums
+from src.sync.operations import count_purgeable_detailed, clear_scan_cache, repair_all_checksums
 from src.drive.client import DriveClientConfig
 
 # ============================================================================
@@ -144,15 +144,23 @@ class SyncApp:
             True if purge was performed, False if cancelled or nothing to purge.
         """
         # Check what would be purged
-        purge_count, purge_size = count_purgeable_charts(
+        stats = count_purgeable_detailed(
             self.folders, get_download_path(), self.user_settings
         )
 
-        if purge_count == 0:
+        if stats.total_files == 0:
             return False
 
-        # Show confirmation with red warning
-        message = f"{Colors.RED}This will delete {purge_count} charts ({format_size(purge_size)}){Colors.RESET}"
+        # Build detailed message showing breakdown
+        parts = []
+        if stats.chart_count > 0:
+            parts.append(f"{stats.chart_count} chart files ({format_size(stats.chart_size)})")
+        if stats.extra_file_count > 0:
+            parts.append(f"{stats.extra_file_count} extra files ({format_size(stats.extra_file_size)})")
+        if stats.partial_count > 0:
+            parts.append(f"{stats.partial_count} partial downloads ({format_size(stats.partial_size)})")
+
+        message = f"{Colors.RED}This will delete: {', '.join(parts)}{Colors.RESET}"
         if not show_confirmation("Are you sure you want to purge?", message):
             return False
 

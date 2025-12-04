@@ -12,13 +12,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Union
 
-from ..constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS
+from ..constants import CHART_MARKERS
 from ..file_ops import find_unexpected_files_with_sizes
 from ..stats import clear_local_stats_cache, get_best_stats
 from ..utils import format_size, format_duration, print_progress, print_long_path_warning, sanitize_path, dedupe_files_by_newest
 from ..drive import DriveClient, FolderScanner
 from ..ui.keyboard import wait_with_skip
-from .downloader import FileDownloader, read_checksum, read_checksum_data, is_archive_file, get_folder_size, repair_checksum_sizes
+from .downloader import FileDownloader, read_checksum, is_archive_file, repair_checksum_sizes
 
 
 # Filesystem scan cache - persists until download/purge invalidates it
@@ -522,7 +522,7 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
                 best_total_charts += sf_best_charts
 
             # Count how many charts we computed for THIS folder (1 per archive/folder)
-            folder_computed_charts = sum(1 for p, d in chart_folders.items() if d["is_chart"])
+            folder_computed_charts = sum(1 for _, d in chart_folders.items() if d["is_chart"])
             folder_synced_charts = 0
             for parent, data in chart_folders.items():
                 if not data["is_chart"]:
@@ -835,7 +835,9 @@ def find_extra_files(folder: dict, base_path: Path) -> list:
         return []
 
     folder_path = base_path / folder["name"]
-    expected_paths = {folder_path / f["path"] for f in manifest_files}
+    # CRITICAL: Use sanitized paths to match actual filenames on disk
+    # Downloads use sanitize_path() which replaces illegal chars (: ? * etc.)
+    expected_paths = {folder_path / sanitize_path(f["path"]) for f in manifest_files}
 
     # Build a set of chart folders that have valid check.txt (synced archive charts)
     # These folders should be entirely skipped during purge
@@ -848,7 +850,9 @@ def find_extra_files(folder: dict, base_path: Path) -> list:
         if is_archive_file(file_name) and file_md5:
             # This is an archive file - check if it's been extracted
             if "/" in file_path:
-                parent = "/".join(file_path.split("/")[:-1])
+                # Sanitize path to match actual folder name on disk
+                sanitized = sanitize_path(file_path)
+                parent = "/".join(sanitized.split("/")[:-1])
                 chart_folder = folder_path / parent
                 stored_md5 = read_checksum(chart_folder)
                 if stored_md5 == file_md5:
@@ -906,21 +910,50 @@ def delete_files(files: list, base_path: Path) -> int:
     return deleted
 
 
+@dataclass
+class PurgeStats:
+    """Detailed breakdown of what would be purged."""
+    # Charts from disabled drives/setlists
+    chart_count: int = 0
+    chart_size: int = 0
+    # Extra files not in manifest
+    extra_file_count: int = 0
+    extra_file_size: int = 0
+    # Partial downloads
+    partial_count: int = 0
+    partial_size: int = 0
+
+    @property
+    def total_files(self) -> int:
+        return self.chart_count + self.extra_file_count + self.partial_count
+
+    @property
+    def total_size(self) -> int:
+        return self.chart_size + self.extra_file_size + self.partial_size
+
+
 def count_purgeable_charts(folders: list, base_path: Path, user_settings=None) -> tuple[int, int]:
     """
-    Count charts that would be purged based on manifest chart definitions.
-
-    Uses the same logic as get_sync_status - a chart is defined by the manifest's
-    folder structure, not by scanning local disk for markers.
+    Count files that would be purged (backward-compatible wrapper).
 
     Returns:
-        Tuple of (chart_count, total_size)
+        Tuple of (total_files, total_size_bytes)
     """
-    total_charts = 0
-    total_size = 0
+    stats = count_purgeable_detailed(folders, base_path, user_settings)
+    return stats.total_files, stats.total_size
 
-    # Pre-convert to set for faster lookups
-    archive_extensions_set = set(CHART_ARCHIVE_EXTENSIONS)
+
+def count_purgeable_detailed(folders: list, base_path: Path, user_settings=None) -> PurgeStats:
+    """
+    Count files that would be purged with detailed breakdown.
+
+    This must match the exact logic of purge_all_folders() to provide accurate estimates.
+    Uses actual file sizes on disk, not manifest sizes (which may be compressed archives).
+
+    Returns:
+        PurgeStats with breakdown of charts vs extra files
+    """
+    stats = PurgeStats()
 
     for folder in folders:
         folder_id = folder.get("folder_id", "")
@@ -931,142 +964,60 @@ def count_purgeable_charts(folders: list, base_path: Path, user_settings=None) -
             continue
 
         drive_enabled = user_settings.is_drive_enabled(folder_id) if user_settings else True
-        manifest_files = folder.get("files", [])
 
         if not drive_enabled:
-            # Drive is disabled - all downloaded content is purgeable
-            is_custom = folder.get("is_custom", False)
-
-            # For custom folders with extracted content, scan actual charts
-            if is_custom:
-                charts, size = _scan_actual_charts(folder_path)
-                total_charts += charts
-                total_size += size
-                continue
-
-            # For regular drives, use manifest-based detection
-            if manifest_files:
-                chart_folders = defaultdict(lambda: {"has_marker": False, "size": 0})
-                for f in manifest_files:
-                    file_path = f.get("path", "")
-                    file_size = f.get("size", 0)
-
-                    slash_idx = file_path.rfind("/")
-                    if slash_idx == -1:
-                        continue
-
-                    # Sanitize path to match local file paths
-                    sanitized_path = sanitize_path(file_path)
-                    sanitized_slash_idx = sanitized_path.rfind("/")
-                    parent = sanitized_path[:sanitized_slash_idx]
-                    file_name = sanitized_path[sanitized_slash_idx + 1:].lower()
-
-                    chart_folders[parent]["size"] += file_size
-                    if file_name in CHART_MARKERS:
-                        chart_folders[parent]["has_marker"] = True
-                    elif any(file_name.endswith(ext) for ext in archive_extensions_set):
-                        chart_folders[parent]["has_marker"] = True
-
-                # Batch scan local files once
-                local_files = _scan_local_files(folder_path)
-
-                for parent, data in chart_folders.items():
-                    if data["has_marker"]:
-                        # Check if chart exists locally using pre-scanned data
-                        parent_prefix = f"{parent}/"
-                        has_local_marker = any(
-                            local_files.get(f"{parent}/{marker}") is not None
-                            for marker in CHART_MARKERS
-                        )
-                        has_local_archive = any(
-                            key.startswith(parent_prefix) and
-                            any(key.lower().endswith(ext) for ext in archive_extensions_set)
-                            for key in local_files
-                        ) if not has_local_marker else False
-
-                        if has_local_marker or has_local_archive:
-                            total_charts += 1
-                            total_size += data["size"]
+            # Drive is disabled - count ALL local files as "charts" (entire drive content)
+            for f in folder_path.rglob("*"):
+                if f.is_file():
+                    try:
+                        stats.chart_count += 1
+                        stats.chart_size += f.stat().st_size
+                    except OSError:
+                        stats.chart_count += 1  # Count file even if we can't stat it
             continue
 
-        # Drive enabled - count charts in disabled setlists
+        # Drive is enabled - count files in disabled setlists + extra files separately
+        setlist_files = []  # Files from disabled setlists (charts)
+
+        # Get disabled setlists
         disabled_setlists = user_settings.get_disabled_subfolders(folder_id) if user_settings else set()
-        if not disabled_setlists:
-            continue
 
-        is_custom = folder.get("is_custom", False)
+        # Count files in disabled setlists (these are chart files)
+        for setlist_name in disabled_setlists:
+            setlist_path = folder_path / setlist_name
+            if setlist_path.exists():
+                for f in setlist_path.rglob("*"):
+                    if f.is_file():
+                        try:
+                            setlist_files.append((f, f.stat().st_size))
+                        except OSError:
+                            setlist_files.append((f, 0))
 
-        # For custom folders, scan local disabled setlist folders directly
-        # (manifest has archives, but local content is extracted)
-        if is_custom:
-            for setlist_name in disabled_setlists:
-                setlist_path = folder_path / setlist_name
-                if setlist_path.exists():
-                    # Scan for actual charts in this disabled setlist
-                    charts, size = _scan_actual_charts(setlist_path)
-                    total_charts += charts
-                    total_size += size
-            continue
+        # Extra files not in manifest
+        extras = find_extra_files(folder, base_path)
 
-        # For regular drives, use manifest-based detection
-        if not manifest_files:
-            continue
+        # Deduplicate setlist files
+        seen = set()
+        for f, size in setlist_files:
+            if f not in seen:
+                seen.add(f)
+                stats.chart_count += 1
+                stats.chart_size += size
 
-        chart_folders = defaultdict(lambda: {"has_marker": False, "size": 0, "setlist": ""})
-        for f in manifest_files:
-            file_path = f.get("path", "")
-            file_size = f.get("size", 0)
-
-            first_slash = file_path.find("/")
-            if first_slash == -1:
-                continue
-
-            # Check setlist before sanitizing (setlist names shouldn't have illegal chars)
-            setlist = file_path[:first_slash]
-            if setlist not in disabled_setlists:
-                continue
-
-            # Sanitize path to match local file paths
-            sanitized_path = sanitize_path(file_path)
-            sanitized_slash_idx = sanitized_path.rfind("/")
-            parent = sanitized_path[:sanitized_slash_idx]
-            file_name = sanitized_path[sanitized_slash_idx + 1:].lower()
-
-            chart_folders[parent]["size"] += file_size
-            chart_folders[parent]["setlist"] = setlist
-            if file_name in CHART_MARKERS:
-                chart_folders[parent]["has_marker"] = True
-            elif any(file_name.endswith(ext) for ext in archive_extensions_set):
-                chart_folders[parent]["has_marker"] = True
-
-        # Batch scan local files once
-        local_files = _scan_local_files(folder_path)
-
-        for parent, data in chart_folders.items():
-            if data["has_marker"]:
-                # Check if chart exists locally using pre-scanned data
-                parent_prefix = f"{parent}/"
-                has_local_marker = any(
-                    local_files.get(f"{parent}/{marker}") is not None
-                    for marker in CHART_MARKERS
-                )
-                has_local_archive = any(
-                    key.startswith(parent_prefix) and
-                    any(key.lower().endswith(ext) for ext in archive_extensions_set)
-                    for key in local_files
-                ) if not has_local_marker else False
-
-                if has_local_marker or has_local_archive:
-                    total_charts += 1
-                    total_size += data["size"]
+        # Add extras (don't overlap with setlist files)
+        for f, size in extras:
+            if f not in seen:
+                seen.add(f)
+                stats.extra_file_count += 1
+                stats.extra_file_size += size
 
     # Also count partial downloads (interrupted archive downloads)
     partial_files = find_partial_downloads(base_path)
     if partial_files:
-        total_charts += len(partial_files)
-        total_size += sum(size for _, size in partial_files)
+        stats.partial_count = len(partial_files)
+        stats.partial_size = sum(size for _, size in partial_files)
 
-    return total_charts, total_size
+    return stats
 
 
 def purge_all_folders(folders: list, base_path: Path, user_settings=None):
