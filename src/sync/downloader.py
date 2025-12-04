@@ -1157,7 +1157,7 @@ class FileDownloader:
         if show_progress:
             progress = FolderProgress(total_files=len(tasks), total_folders=0)
             progress.register_folders(tasks)
-            print(f"  Downloading {len(tasks)} files across {progress.total_folders} charts...")
+            print(f"  Downloading {len(tasks)} files across {progress.total_charts} charts...")
             print(f"  (max {self.max_workers} concurrent downloads, press ESC to cancel)")
             print()
 
@@ -1263,6 +1263,12 @@ class FileDownloader:
             file_name = file_path.split("/")[-1] if "/" in file_path else file_path
             file_size = f.get("size", 0)
             file_md5 = f.get("md5", "")
+
+            # Skip Google Docs/Sheets (no MD5 AND no file extension = can't download as binary)
+            # Regular files have MD5s; even extensionless files like _rb3con have MD5s
+            if not file_md5 and "." not in file_name:
+                skipped += 1
+                continue
 
             if is_archive_file(file_name):
                 # Archive file: check MD5 in check.txt

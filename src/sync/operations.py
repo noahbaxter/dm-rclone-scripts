@@ -444,15 +444,8 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
 
             status.total_charts += 1
 
-            # For custom folders with downloaded data, we'll calculate total_size per-setlist below
-            if synced_from_scan is not None:
-                # Skip adding manifest size here - we'll use disk sizes for downloaded setlists
-                pass
-            else:
-                status.total_size += data["total_size"]
-
-            # For custom folders with scanned data, skip per-chart sync checking
-            # We'll use the scan results for synced counts instead
+            # For custom folders with scanned data, skip per-chart processing
+            # We'll use the scan results and calculate total_size per-setlist below
             if synced_from_scan is not None:
                 continue
 
@@ -463,7 +456,13 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
                 )
                 if is_synced:
                     status.synced_charts += 1
-                    status.synced_size += extracted_size if extracted_size else data["total_size"]
+                    # Use extracted size for both synced and total (consistent disk usage)
+                    size_to_use = extracted_size if extracted_size else data["total_size"]
+                    status.synced_size += size_to_use
+                    status.total_size += size_to_use
+                else:
+                    # Not synced - use manifest size (what they'll download)
+                    status.total_size += data["total_size"]
                 continue
 
             # For folder charts, check if all files exist locally (using pre-scanned data)
@@ -477,6 +476,7 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
             if all_synced:
                 status.synced_charts += 1
                 status.synced_size += data["total_size"]
+            status.total_size += data["total_size"]
 
         # For custom folders, use scan results for synced counts
         # Calculate total_size: disk size for downloaded setlists, manifest size for not-downloaded
