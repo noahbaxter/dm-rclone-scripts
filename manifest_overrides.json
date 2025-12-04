@@ -1,0 +1,37 @@
+{
+  "version": "1.0",
+  "description": "Admin overrides for nested archives where manifest counts the archive (1) instead of charts inside. Names must EXACTLY match manifest setlist names. Local disk scan always takes priority when content is downloaded.",
+  "overrides": {
+    "Guitar Hero": {
+      "_description": "Game rips - each archive contains an entire game's worth of charts",
+      "setlists": {
+        "(2005) Guitar Hero": { "chart_count": 58 },
+        "(2006) Guitar Hero II": { "chart_count": 100 },
+        "(2007) Guitar Hero Encore: Rocks the 80s": { "chart_count": 39 },
+        "(2007) Guitar Hero III: Legends of Rock": { "chart_count": 75 },
+        "(2008) Guitar Hero World Tour": { "chart_count": 86 },
+        "(2008) Guitar Hero: Aerosmith": { "chart_count": 47 },
+        "(2008-2009) Guitar Hero: On Tour Complete": { "chart_count": 111 },
+        "(2009) Band Hero": { "chart_count": 71 },
+        "(2009) DJ Hero": { "chart_count": 10 },
+        "(2009) Guitar Hero 5": { "chart_count": 90 },
+        "(2009) Guitar Hero Smash Hits": { "chart_count": 50 },
+        "(2009) Guitar Hero: Metallica": { "chart_count": 49 },
+        "(2009) Guitar Hero: Van Halen": { "chart_count": 47 },
+        "(2010) Guitar Hero: Warriors of Rock": { "chart_count": 94 },
+        "(2015) Guitar Hero Live": { "chart_count": 42 }
+      }
+    },
+    "Rock Band": {
+      "_description": "Game rips - each archive contains an entire game's worth of charts",
+      "setlists": {
+        "(2007) Rock Band": { "chart_count": 58 },
+        "(2008) Rock Band 2": { "chart_count": 84 },
+        "(2009) Lego Rock Band": { "chart_count": 45 },
+        "(2009) The Beatles Rock Band": { "chart_count": 45 },
+        "(2010) Green Day Rock Band": { "chart_count": 47 },
+        "(2010) Rock Band 3": { "chart_count": 83 }
+      }
+    }
+  }
+}

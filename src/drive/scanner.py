@@ -107,15 +107,21 @@ class FolderScanner:
                                         shortcut_count += 1
                                         folders_to_scan.append((target_id, item_path))
                                     elif target_id:
-                                        # Shortcut to file
-                                        all_files.append({
-                                            "id": target_id,
-                                            "path": item_path,
-                                            "name": item_name,
-                                            "size": int(item.get("size", 0)),
-                                            "md5": item.get("md5Checksum", ""),
-                                            "modified": item.get("modifiedTime", ""),
-                                        })
+                                        # Shortcut to file - need to fetch target's metadata
+                                        # (shortcuts don't have size/md5, only the target file does)
+                                        target_meta = self.client.get_file_metadata(
+                                            target_id,
+                                            fields="id,name,size,md5Checksum,modifiedTime"
+                                        )
+                                        if target_meta:
+                                            all_files.append({
+                                                "id": target_id,
+                                                "path": item_path,
+                                                "name": item_name,
+                                                "size": int(target_meta.get("size", 0)),
+                                                "md5": target_meta.get("md5Checksum", ""),
+                                                "modified": target_meta.get("modifiedTime", ""),
+                                            })
 
                                 # Handle regular files
                                 else:

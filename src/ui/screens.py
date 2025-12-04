@@ -7,9 +7,10 @@ Handles menu display, user input, and terminal operations.
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..utils import format_size, clear_screen
+from ..utils import format_size, clear_screen, dedupe_files_by_newest
 from ..config import UserSettings, DrivesConfig, extract_subfolders_from_manifest
-from ..sync.operations import get_sync_status, count_purgeable_charts, SyncStatus, _scan_actual_charts
+from ..sync.operations import get_sync_status, count_purgeable_charts, SyncStatus
+from ..stats import get_best_stats, get_scanner, get_overrides
 from .menu import Menu, MenuItem, MenuDivider, MenuGroupHeader, MenuResult, print_header
 from .colors import Colors
 
@@ -75,9 +76,13 @@ def format_colored_size(
             return f"{Colors.RED}{format_size(excess_size)}"
         return f"{Colors.RED}{format_size(excess_size)}{m} + {Colors.RESET}{format_size(synced_size)}{m}/{format_size(total_size)}"
     elif synced_is_excess and synced_size > 0:
-        return f"{Colors.RED}{format_size(synced_size)}{m}/{format_size(total_size)}"
+        # Use synced as total if total is 0 (missing manifest data)
+        effective_total = total_size if total_size > 0 else synced_size
+        return f"{Colors.RED}{format_size(synced_size)}{m}/{format_size(effective_total)}"
     elif synced_size > 0:
-        return f"{Colors.RESET}{format_size(synced_size)}{m}/{format_size(total_size)}"
+        # Use synced as total if total is 0 (missing manifest data)
+        effective_total = total_size if total_size > 0 else synced_size
+        return f"{Colors.RESET}{format_size(synced_size)}{m}/{format_size(effective_total)}"
     else:
         return format_size(total_size)
 
@@ -109,7 +114,11 @@ def format_sync_subtitle(
 
     pct = (status.synced_charts / status.total_charts * 100)
     charts_str = format_colored_count(status.synced_charts, status.total_charts, excess=excess_charts)
-    size_str = format_colored_size(status.synced_size, status.total_size, excess_size=excess_size)
+
+    # If total_size is 0 but we have synced data, use synced_size as total
+    # (handles manifests with missing size data, like Guitar Hero archives)
+    effective_total_size = status.total_size if status.total_size > 0 else status.synced_size
+    size_str = format_colored_size(status.synced_size, effective_total_size, excess_size=excess_size)
 
     return f"Synced: {charts_str} {unit} ({size_str}) | {pct:.0f}%"
 
@@ -357,6 +366,7 @@ def show_main_menu(
 
     # Show purge count from cache
     menu.add_item(MenuItem("Purge", hotkey="X", value=("purge", None), description=cache.purge_desc))
+    menu.add_item(MenuItem("Repair Checksums", hotkey="R", value=("repair", None), description="Fix missing size data in check.txt files"))
 
     # Custom folders option
     menu.add_item(MenuDivider())
@@ -396,16 +406,27 @@ def show_main_menu(
     return (action, value, restore_pos)
 
 
-def _compute_setlist_stats_from_files(folder: dict) -> dict:
+def _compute_setlist_stats_from_files(folder: dict, dedupe: bool = True) -> dict:
     """
-    Compute setlist stats from files list for custom folders.
+    Compute setlist stats from files list.
 
-    Returns dict mapping setlist name to {archives: int, total_size: int}
+    Args:
+        folder: Folder dict with "files" list
+        dedupe: If True, deduplicate files first (removes older versions with same path)
+
+    Returns dict mapping setlist name to {archives: int, charts: int, total_size: int}
     """
     from ..sync.downloader import is_archive_file
+    from ..constants import CHART_MARKERS
 
     stats = {}
     files = folder.get("files", [])
+
+    if dedupe:
+        files = dedupe_files_by_newest(files)
+
+    # Group files by chart folder to count charts properly
+    chart_folders = {}  # (setlist, path) -> {setlist, is_chart}
 
     for f in files:
         path = f.get("path", "")
@@ -416,14 +437,36 @@ def _compute_setlist_stats_from_files(folder: dict) -> dict:
 
         setlist = path.split("/")[0]
         if setlist not in stats:
-            stats[setlist] = {"archives": 0, "total_size": 0}
+            stats[setlist] = {"archives": 0, "charts": 0, "total_size": 0}
 
         stats[setlist]["total_size"] += size
 
-        # Count archives (each archive is typically one chart/song pack)
-        filename = path.split("/")[-1]
-        if is_archive_file(filename):
-            stats[setlist]["archives"] += 1
+        # Determine parent folder (chart folder)
+        parts = path.split("/")
+        if len(parts) >= 2:
+            # For archives at setlist/archive.zip level, parent is setlist
+            # For files at setlist/chart/file level, parent is setlist/chart
+            filename = parts[-1].lower()
+
+            if is_archive_file(filename):
+                stats[setlist]["archives"] += 1
+                # Each archive is a chart
+                chart_key = (setlist, path)  # Unique per archive
+                chart_folders[chart_key] = {"setlist": setlist, "is_chart": True}
+            elif len(parts) >= 3:
+                # Regular file in a chart folder
+                parent = "/".join(parts[:-1])
+                chart_key = (setlist, parent)
+                if chart_key not in chart_folders:
+                    chart_folders[chart_key] = {"setlist": setlist, "is_chart": False}
+                # Check for chart markers
+                if filename in {m.lower() for m in CHART_MARKERS}:
+                    chart_folders[chart_key]["is_chart"] = True
+
+    # Count charts per setlist
+    for key, data in chart_folders.items():
+        if data["is_chart"]:
+            stats[data["setlist"]]["charts"] += 1
 
     return stats
 
@@ -469,13 +512,51 @@ def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_
         return False
 
     # Build lookup for setlist stats
-    # For custom folders, compute from files; for regular drives, use manifest subfolders
+    # For custom folders, use archive count from computed stats
+    # For regular drives, use get_best_stats() which checks: local scan > overrides > manifest
+    computed_stats = _compute_setlist_stats_from_files(folder, dedupe=True)
+    local_folder_path = download_path / folder_name if download_path else None
+
     if is_custom:
-        custom_stats = _compute_setlist_stats_from_files(folder)
+        # Custom folders use archive count
         setlist_stats = {name: {"archives": data["archives"], "total_size": data["total_size"]}
-                        for name, data in custom_stats.items()}
+                        for name, data in computed_stats.items()}
     else:
-        setlist_stats = {sf.get("name"): sf for sf in folder.get("subfolders", [])}
+        # Regular drives: use the new stats module for best available data
+        # Priority: local disk scan > admin overrides > manifest data
+        manifest_stats = {sf.get("name"): sf for sf in folder.get("subfolders", [])}
+        setlist_stats = {}
+
+        for name, data in computed_stats.items():
+            computed_size = data["total_size"]
+
+            # Get manifest stats for this setlist
+            manifest_sf = manifest_stats.get(name, {})
+            manifest_charts = manifest_sf.get("charts", {}).get("total", 0)
+            manifest_size = manifest_sf.get("total_size", 0)
+
+            # Use get_best_stats() for smart resolution
+            best_charts, best_size = get_best_stats(
+                folder_name=folder_name,
+                setlist_name=name,
+                manifest_charts=manifest_charts,
+                manifest_size=manifest_size,
+                local_path=local_folder_path,
+            )
+
+            # If best_size is 0 but we have computed size, use that
+            if best_size == 0 and computed_size > 0:
+                best_size = computed_size
+
+            setlist_stats[name] = {
+                "charts": {"total": best_charts},
+                "total_size": best_size,
+            }
+
+        # Include any setlists from manifest that weren't in computed (shouldn't happen, but safe)
+        for name, sf in manifest_stats.items():
+            if name not in setlist_stats:
+                setlist_stats[name] = sf
 
     changed = False
     selected_index = 0  # Track menu position to maintain after any action
@@ -515,9 +596,6 @@ def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_
 
         menu = Menu(title=f"{folder_name} - Setlists:", subtitle=subtitle, space_hint="Toggle")
 
-        # Get local folder path for checking downloaded sizes
-        local_folder_path = download_path / folder_name if download_path else None
-
         # Add setlist toggle items (no hotkeys - too many setlists)
         for i, setlist_name in enumerate(setlists):
             setlist_enabled = user_settings.is_subfolder_enabled(folder_id, setlist_name)
@@ -534,20 +612,12 @@ def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_
                 item_count = stats.get("charts", {}).get("total", 0)
                 unit = "charts" if item_count != 1 else "chart"
 
-            # Check downloaded size and actual chart count for this setlist
+            # Check downloaded size for this setlist
             downloaded_size = 0
-            actual_chart_count = 0
             if local_folder_path:
                 setlist_path = local_folder_path / setlist_name
                 if setlist_path.exists():
                     downloaded_size = _get_folder_size(setlist_path)
-                    # Scan for actual charts on disk (cached)
-                    actual_chart_count, _ = _scan_actual_charts(setlist_path)
-
-            # Use actual disk count if available, otherwise fall back to manifest
-            if actual_chart_count > 0:
-                item_count = actual_chart_count
-                unit = "charts" if item_count != 1 else "chart"
 
             # Build description with color-coded sizes
             desc_parts = []

@@ -28,6 +28,9 @@ from .drive import DriveClient, FolderScanner, OAuthManager, UserOAuthManager, A
 # Sync module
 from .sync import FileDownloader, FolderSync, purge_all_folders, get_sync_status, SyncStatus
 
+# Stats module
+from .stats import get_best_stats, LocalStatsScanner, ManifestOverrides, clear_local_stats_cache
+
 # UI module
 from .ui import print_header, show_main_menu, show_subfolder_settings, Colors, compute_main_menu_cache, show_confirmation, show_oauth_prompt, show_add_custom_folder
 
@@ -70,6 +73,11 @@ __all__ = [
     "purge_all_folders",
     "get_sync_status",
     "SyncStatus",
+    # Stats
+    "get_best_stats",
+    "LocalStatsScanner",
+    "ManifestOverrides",
+    "clear_local_stats_cache",
     # UI
     "print_header",
     "show_main_menu",

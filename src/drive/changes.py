@@ -30,6 +30,7 @@ class ChangeTracker:
     """
 
     FOLDER_MIME = "application/vnd.google-apps.folder"
+    SHORTCUT_MIME = "application/vnd.google-apps.shortcut"
 
     def __init__(self, client: DriveClient, manifest: Manifest):
         """
@@ -100,6 +101,38 @@ class ChangeTracker:
             # Skip folders
             if file_data and file_data.get("mimeType") == self.FOLDER_MIME:
                 continue
+
+            # Handle shortcuts - need to fetch target's metadata for size/md5
+            if file_data and file_data.get("mimeType") == self.SHORTCUT_MIME:
+                shortcut_details = file_data.get("shortcutDetails", {})
+                target_id = shortcut_details.get("targetId")
+                target_mime = shortcut_details.get("targetMimeType", "")
+
+                # Skip shortcuts to folders
+                if target_mime == self.FOLDER_MIME:
+                    continue
+
+                # For shortcuts to files, fetch the target's metadata
+                if target_id:
+                    target_meta = self.client.get_file_metadata(
+                        target_id,
+                        fields="id,name,size,md5Checksum,modifiedTime,parents"
+                    )
+                    if target_meta:
+                        # Use target's metadata but keep shortcut's file_id for tracking
+                        # and merge parents so path resolution works
+                        file_data = {
+                            **file_data,
+                            "size": target_meta.get("size", 0),
+                            "md5Checksum": target_meta.get("md5Checksum", ""),
+                            "modifiedTime": target_meta.get("modifiedTime", ""),
+                        }
+                        # Use target_id for the manifest entry (needed for downloads)
+                        file_id = target_id
+                    else:
+                        # Can't get target metadata, skip
+                        stats.skipped += 1
+                        continue
 
             # Check if file is in tracked folders
             if file_data:

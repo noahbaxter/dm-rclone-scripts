@@ -14,10 +14,11 @@ from typing import Callable, Optional, Union
 
 from ..constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS
 from ..file_ops import find_unexpected_files_with_sizes
-from ..utils import format_size, format_duration, print_progress, print_long_path_warning, sanitize_path
+from ..stats import clear_local_stats_cache, get_best_stats
+from ..utils import format_size, format_duration, print_progress, print_long_path_warning, sanitize_path, dedupe_files_by_newest
 from ..drive import DriveClient, FolderScanner
 from ..ui.keyboard import wait_with_skip
-from .downloader import FileDownloader, read_checksum, read_checksum_data, is_archive_file, get_folder_size
+from .downloader import FileDownloader, read_checksum, read_checksum_data, is_archive_file, get_folder_size, repair_checksum_sizes
 
 
 # Filesystem scan cache - persists until download/purge invalidates it
@@ -51,11 +52,13 @@ _scan_cache = _ScanCache()
 def clear_scan_cache():
     """Clear the filesystem scan cache. Call after downloads or purges."""
     _scan_cache.clear()
+    clear_local_stats_cache()  # Also clear the stats module cache
 
 
 def clear_folder_cache(folder_path: Path):
     """Clear cache for a specific folder. Call after downloading to that folder."""
     _scan_cache.clear_folder(str(folder_path))
+    clear_local_stats_cache(folder_path)  # Also clear the stats module cache
 
 
 @dataclass
@@ -263,6 +266,41 @@ def _scan_checksums(folder_path: Path) -> dict[str, dict]:
     return checksums
 
 
+def _check_archive_synced(checksums: dict, checksum_path: str, archive_name: str, manifest_md5: str) -> tuple[bool, int]:
+    """
+    Check if an archive is synced by comparing checksum data.
+
+    Args:
+        checksums: Dict from _scan_checksums()
+        checksum_path: Path key in checksums dict
+        archive_name: Name of archive file to check
+        manifest_md5: Expected MD5 from manifest
+
+    Returns:
+        Tuple of (is_synced, extracted_size)
+    """
+    checksum_data = checksums.get(checksum_path, {})
+    stored_md5 = None
+    extracted_size = 0
+    has_entry = False
+
+    # New multi-archive format
+    if "archives" in checksum_data:
+        archive_info = checksum_data["archives"].get(archive_name, {})
+        if archive_info:
+            has_entry = True
+            stored_md5 = archive_info.get("md5", "")
+            extracted_size = archive_info.get("size", 0)
+    # Old single-archive format
+    elif "md5" in checksum_data:
+        has_entry = True
+        stored_md5 = checksum_data.get("md5", "")
+        extracted_size = checksum_data.get("size", 0)
+
+    is_synced = has_entry and stored_md5 == manifest_md5
+    return is_synced, extracted_size
+
+
 def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncStatus:
     """
     Calculate sync status for enabled folders (counts charts, not files).
@@ -290,6 +328,9 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
         manifest_files = folder.get("files", [])
         if not manifest_files:
             continue
+
+        # Deduplicate files with same path, keeping only newest version
+        manifest_files = dedupe_files_by_newest(manifest_files)
 
         # Get disabled setlists (needed for both custom and regular folders)
         disabled_setlists = set()
@@ -362,9 +403,9 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
                 if setlist in disabled_setlists:
                     continue
 
-            # For custom folders with archives, each archive is a separate "chart"
-            # Use the full path as key so each archive counts separately
-            if is_custom and is_archive_file(file_name):
+            # Archives are each treated as individual charts (one archive = one song)
+            # Use full path as key so each archive counts separately
+            if is_archive_file(file_name):
                 chart_folders[sanitized_path]["files"].append((sanitized_path, file_size))
                 chart_folders[sanitized_path]["total_size"] += file_size
                 chart_folders[sanitized_path]["is_chart"] = True
@@ -372,18 +413,13 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
                 chart_folders[sanitized_path]["archive_name"] = archive_name
                 chart_folders[sanitized_path]["checksum_path"] = parent
             else:
+                # Non-archive files: group by parent folder
                 chart_folders[parent]["files"].append((sanitized_path, file_size))
                 chart_folders[parent]["total_size"] += file_size
 
                 # Check for chart markers (song.ini, notes.mid, etc.)
                 if file_name in CHART_MARKERS:
                     chart_folders[parent]["is_chart"] = True
-                # Check for archive files (.zip, .7z, .rar)
-                elif is_archive_file(file_name):
-                    chart_folders[parent]["is_chart"] = True
-                    chart_folders[parent]["archive_md5"] = file_md5
-                    chart_folders[parent]["archive_name"] = archive_name
-                    chart_folders[parent]["checksum_path"] = parent  # Same as parent for subfolders
 
         # Batch scan: get all local files and checksums upfront
         local_files = _scan_local_files(folder_path)
@@ -421,26 +457,11 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
                 continue
 
             # For archive charts, check if check.txt has matching MD5
-            if data["archive_md5"]:
-                checksum_path = data["checksum_path"]
-                archive_name = data["archive_name"]
-                checksum_data = checksums.get(checksum_path, {})
-
-                # Support both old and new check.txt formats
-                stored_md5 = None
-                extracted_size = 0
-
-                # New multi-archive format
-                if "archives" in checksum_data:
-                    archive_info = checksum_data["archives"].get(archive_name, {})
-                    stored_md5 = archive_info.get("md5")
-                    extracted_size = archive_info.get("size", 0)
-                # Old single-archive format
-                elif checksum_data.get("md5"):
-                    stored_md5 = checksum_data.get("md5")
-                    extracted_size = checksum_data.get("size", 0)
-
-                if stored_md5 == data["archive_md5"]:
+            if data["archive_name"]:
+                is_synced, extracted_size = _check_archive_synced(
+                    checksums, data["checksum_path"], data["archive_name"], data["archive_md5"]
+                )
+                if is_synced:
                     status.synced_charts += 1
                     status.synced_size += extracted_size if extracted_size else data["total_size"]
                 continue
@@ -474,6 +495,61 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
                 else:
                     # Not downloaded - use manifest size
                     status.total_size += manifest_size
+
+        # Adjustment for nested archives: use get_best_stats() which checks
+        # local scan > overrides > manifest for each setlist's chart count.
+        # This handles Guitar Hero where 1 archive = 86 charts inside.
+        subfolders = folder.get("subfolders", [])
+        if subfolders and not is_custom:
+            # Sum up chart counts for ENABLED setlists using get_best_stats
+            best_total_charts = 0
+            for sf in subfolders:
+                sf_name = sf.get("name", "")
+                # Check if this setlist is enabled
+                if user_settings and not user_settings.is_subfolder_enabled(folder_id, sf_name):
+                    continue
+                sf_manifest_charts = sf.get("charts", {}).get("total", 0)
+                sf_manifest_size = sf.get("total_size", 0)
+
+                # Use get_best_stats to get override or local scan count
+                sf_best_charts, _ = get_best_stats(
+                    folder_name=folder_name,
+                    setlist_name=sf_name,
+                    manifest_charts=sf_manifest_charts,
+                    manifest_size=sf_manifest_size,
+                    local_path=folder_path if folder_path.exists() else None,
+                )
+                best_total_charts += sf_best_charts
+
+            # Count how many charts we computed for THIS folder (1 per archive/folder)
+            folder_computed_charts = sum(1 for p, d in chart_folders.items() if d["is_chart"])
+            folder_synced_charts = 0
+            for parent, data in chart_folders.items():
+                if not data["is_chart"]:
+                    continue
+                if data["archive_name"]:
+                    is_synced, _ = _check_archive_synced(
+                        checksums, data["checksum_path"], data["archive_name"], data["archive_md5"]
+                    )
+                    if is_synced:
+                        folder_synced_charts += 1
+                else:
+                    # Folder chart - check if synced
+                    all_synced = all(local_files.get(fp) == fs for fp, fs in data["files"])
+                    if all_synced:
+                        folder_synced_charts += 1
+
+            # If best stats has more charts than computed, we have nested archives
+            # (1 archive = many songs inside, like Guitar Hero)
+            if best_total_charts > folder_computed_charts:
+                # Adjust totals: remove computed, add best stats
+                status.total_charts -= folder_computed_charts
+                status.total_charts += best_total_charts
+
+                # For synced: if all archives are synced, assume all nested charts are synced
+                if folder_synced_charts == folder_computed_charts and folder_computed_charts > 0:
+                    status.synced_charts -= folder_synced_charts
+                    status.synced_charts += best_total_charts
 
     return status
 
@@ -525,6 +601,13 @@ class FolderSync:
                 filtered_count = original_count - len(manifest_files)
                 if filtered_count > 0:
                     print(f"  Filtered out {filtered_count} files from disabled subfolders")
+
+            # Deduplicate files with same path, keeping only newest version
+            deduped_files = dedupe_files_by_newest(manifest_files)
+            dupe_count = len(manifest_files) - len(deduped_files)
+            if dupe_count > 0:
+                print(f"  Deduplicated {dupe_count} older file versions")
+            manifest_files = deduped_files
 
             print(f"  Using manifest ({len(manifest_files)} files)...")
             tasks, skipped, long_paths = self.downloader.filter_existing(manifest_files, folder_path)
@@ -710,6 +793,32 @@ def format_extras_tree(files: list, base_path: Path) -> list[str]:
         lines.append(f"  {folder_path}/ ({stats['count']} {file_word}, {format_size(stats['size'])})")
 
     return lines
+
+
+def find_partial_downloads(base_path: Path) -> list:
+    """
+    Find partial download files (files with _download_ prefix).
+
+    These are incomplete archive downloads that were interrupted and can't be resumed.
+
+    Args:
+        base_path: Base download path to scan
+
+    Returns:
+        List of (Path, size) tuples for partial download files
+    """
+    partial_files = []
+    if not base_path.exists():
+        return partial_files
+
+    for f in base_path.rglob("_download_*"):
+        if f.is_file():
+            try:
+                partial_files.append((f, f.stat().st_size))
+            except Exception:
+                partial_files.append((f, 0))
+
+    return partial_files
 
 
 def find_extra_files(folder: dict, base_path: Path) -> list:
@@ -951,6 +1060,12 @@ def count_purgeable_charts(folders: list, base_path: Path, user_settings=None) -
                     total_charts += 1
                     total_size += data["size"]
 
+    # Also count partial downloads (interrupted archive downloads)
+    partial_files = find_partial_downloads(base_path)
+    if partial_files:
+        total_charts += len(partial_files)
+        total_size += sum(size for _, size in partial_files)
+
     return total_charts, total_size
 
 
@@ -962,6 +1077,7 @@ def purge_all_folders(folders: list, base_path: Path, user_settings=None):
     - Files not in the manifest (extra files)
     - Files from disabled drives
     - Files from disabled setlists
+    - Partial downloads (interrupted archive downloads with _download_ prefix)
 
     Args:
         folders: List of folder dicts from manifest
@@ -1051,6 +1167,17 @@ def purge_all_folders(folders: list, base_path: Path, user_settings=None):
         total_size += folder_size
         print(f"  Removed {deleted} files")
 
+    # Clean up partial downloads (interrupted archive downloads)
+    partial_files = find_partial_downloads(base_path)
+    if partial_files:
+        partial_size = sum(size for _, size in partial_files)
+        print(f"\n[Partial Downloads]")
+        print(f"  Found {len(partial_files)} incomplete download(s) ({format_size(partial_size)})")
+        deleted = delete_files(partial_files, base_path)
+        total_deleted += deleted
+        total_size += partial_size
+        print(f"  Cleaned up {deleted} file(s)")
+
     print()
     if total_deleted > 0:
         print(f"Total: Removed {total_deleted} files ({format_size(total_size)})")
@@ -1059,3 +1186,52 @@ def purge_all_folders(folders: list, base_path: Path, user_settings=None):
 
     # Auto-dismiss after 2 seconds (any key skips)
     wait_with_skip(2)
+
+
+def repair_all_checksums(folders: list, base_path: Path) -> tuple[int, int]:
+    """
+    Repair check.txt files for all folders.
+
+    Fixes missing/incorrect size data and renames _download_ prefixed folders.
+
+    Args:
+        folders: List of folder dicts from manifest
+        base_path: Base download path
+
+    Returns:
+        Tuple of (total_repaired, total_checked)
+    """
+    total_repaired = 0
+    total_checked = 0
+
+    print("Repairing checksum data...")
+    print("=" * 50)
+
+    for folder in folders:
+        folder_name = folder.get("name", "")
+        folder_path = base_path / folder_name
+
+        if not folder_path.exists():
+            continue
+
+        print(f"\n[{folder_name}]")
+        repaired, checked = repair_checksum_sizes(folder_path)
+        total_repaired += repaired
+        total_checked += checked
+
+        if repaired > 0:
+            print(f"  Repaired {repaired}/{checked} check.txt files")
+        else:
+            print(f"  Checked {checked} files (all OK)")
+
+    print()
+    print("=" * 50)
+    print(f"Total: Repaired {total_repaired}/{total_checked} check.txt files")
+
+    # Clear cache so stats are recalculated
+    clear_scan_cache()
+
+    # Auto-dismiss after 2 seconds (any key skips)
+    wait_with_skip(2)
+
+    return total_repaired, total_checked
