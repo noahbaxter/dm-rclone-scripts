@@ -25,7 +25,7 @@ import certifi
 
 from ..constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS, VIDEO_EXTENSIONS
 from ..file_ops import file_exists_with_size
-from ..utils import sanitize_path
+from ..utils import sanitize_path, is_windows_long_paths_enabled
 from .progress import ProgressTracker
 
 # Windows MAX_PATH limit (260 chars including null terminator)
@@ -1250,12 +1250,13 @@ class FileDownloader:
 
         Returns:
             Tuple of (tasks_to_download, skipped_count, long_paths)
-            long_paths: List of paths that exceed Windows MAX_PATH (only on Windows)
+            long_paths: List of paths that exceed Windows MAX_PATH (only on Windows without LongPathsEnabled)
         """
         to_download = []
         skipped = 0
         long_paths = []
-        is_windows = os.name == 'nt'
+        # Only enforce path length limit on Windows when LongPathsEnabled is not set
+        check_path_length = os.name == 'nt' and not is_windows_long_paths_enabled()
 
         for f in files:
             # Sanitize path for Windows-illegal characters (*, ?, ", <, >, |, :)
@@ -1276,9 +1277,9 @@ class FileDownloader:
                 local_path = local_base / file_path
                 chart_folder = local_path.parent
 
-                # Check for long path on Windows
+                # Check for long path on Windows (only if LongPathsEnabled not set)
                 download_path = chart_folder / f"_download_{file_name}"
-                if is_windows and len(str(download_path)) >= WINDOWS_MAX_PATH:
+                if check_path_length and len(str(download_path)) >= WINDOWS_MAX_PATH:
                     long_paths.append(file_path)
                     continue
 
@@ -1300,8 +1301,8 @@ class FileDownloader:
                 # Regular file: check if exists with matching size
                 local_path = local_base / file_path
 
-                # Check for long path on Windows
-                if is_windows and len(str(local_path)) >= WINDOWS_MAX_PATH:
+                # Check for long path on Windows (only if LongPathsEnabled not set)
+                if check_path_length and len(str(local_path)) >= WINDOWS_MAX_PATH:
                     long_paths.append(file_path)
                     continue
 
