@@ -177,11 +177,15 @@ class SyncApp:
         """Repair check.txt files with missing/incorrect size data."""
         repair_all_checksums(self.folders, get_download_path())
 
-    def handle_configure_drive(self, folder_id: str):
-        """Configure setlists for a specific drive, or show options for custom folders."""
+    def handle_configure_drive(self, folder_id: str) -> bool:
+        """Configure setlists for a specific drive, or show options for custom folders.
+        
+        Returns:
+            True if settings were changed, False otherwise
+        """
         folder = self._get_folder_by_id(folder_id)
         if not folder:
-            return
+            return False
 
         # Show subfolder settings (works for both regular and custom folders)
         result = show_subfolder_settings(folder, self.user_settings, get_download_path())
@@ -189,8 +193,13 @@ class SyncApp:
         # Handle custom folder actions
         if result == "scan":
             self._scan_single_custom_folder(folder)
+            return True  # Scanning changes folder state
         elif result == "remove":
             self._remove_custom_folder(folder.get("folder_id"), folder.get("name"))
+            return True  # Removal changes folder state
+        
+        # result is True if settings changed, False otherwise
+        return result is True
 
     def _show_custom_folder_options(self, folder: dict):
         """Show options menu for a custom folder."""
@@ -604,8 +613,9 @@ class SyncApp:
 
             elif action == "configure":
                 # Enter on a drive - go directly to configure that drive
-                self.handle_configure_drive(value)
-                menu_cache = None  # Invalidate cache after configure (setlists may change)
+                changed = self.handle_configure_drive(value)
+                if changed:  # Only invalidate cache if settings were changed
+                    menu_cache = None
 
             elif action == "toggle":
                 # Space on a drive - toggle drive on/off
