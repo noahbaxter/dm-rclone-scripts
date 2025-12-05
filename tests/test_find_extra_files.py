@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from src.sync.operations import find_extra_files
+from src.sync.operations import find_extra_files, _scan_local_files, clear_scan_cache
 
 
 class TestArchiveDetection:
@@ -19,6 +19,7 @@ class TestArchiveDetection:
 
     @pytest.fixture
     def temp_dir(self):
+        clear_scan_cache()  # Ensure clean state
         with tempfile.TemporaryDirectory() as tmpdir:
             yield Path(tmpdir)
 
@@ -150,6 +151,60 @@ class TestArchiveDetection:
 
         extra_names = [f.name for f, _ in extras]
         assert "song.ini" in extra_names, "Files without check.txt should be flagged"
+
+
+class TestFindExtraFilesWithCache:
+    """Tests for find_extra_files when passed pre-scanned local_files."""
+
+    @pytest.fixture
+    def temp_dir(self):
+        clear_scan_cache()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield Path(tmpdir)
+
+    def test_with_explicit_local_files_param(self, temp_dir):
+        """find_extra_files should work correctly when passed cached local_files."""
+        folder_path = temp_dir / "TestDrive"
+        folder_path.mkdir()
+
+        # Create expected and extra files
+        (folder_path / "expected.txt").write_text("expected")
+        (folder_path / "extra.txt").write_text("extra")
+
+        folder = {
+            "name": "TestDrive",
+            "files": [{"path": "expected.txt", "size": 8, "md5": "abc"}]
+        }
+
+        # Pre-scan and pass explicitly (the optimized path)
+        local_files = _scan_local_files(folder_path)
+        extras = find_extra_files(folder, temp_dir, local_files)
+
+        assert len(extras) == 1
+        assert extras[0][0].name == "extra.txt"
+
+    def test_empty_folder_returns_empty(self, temp_dir):
+        """Empty folder should return no extras, not crash."""
+        folder_path = temp_dir / "EmptyDrive"
+        folder_path.mkdir()
+
+        folder = {
+            "name": "EmptyDrive",
+            "files": [{"path": "something.txt", "size": 10, "md5": "abc"}]
+        }
+
+        extras = find_extra_files(folder, temp_dir)
+        assert extras == []
+
+    def test_nonexistent_folder_returns_empty(self, temp_dir):
+        """Non-existent folder should return no extras, not crash."""
+        folder = {
+            "name": "DoesNotExist",
+            "files": [{"path": "file.txt", "size": 10, "md5": "abc"}]
+        }
+
+        extras = find_extra_files(folder, temp_dir)
+        assert extras == []
 
 
 if __name__ == "__main__":

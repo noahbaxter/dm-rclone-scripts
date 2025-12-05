@@ -16,6 +16,7 @@ from src.sync.operations import (
     find_extra_files,
     count_purgeable_detailed,
     PurgeStats,
+    clear_scan_cache,
 )
 
 
@@ -30,6 +31,7 @@ class TestFindExtraFilesSanitization:
 
     @pytest.fixture
     def temp_dir(self):
+        clear_scan_cache()  # Ensure clean state
         with tempfile.TemporaryDirectory() as tmpdir:
             yield Path(tmpdir)
 
@@ -97,6 +99,7 @@ class TestCountMatchesDeletion:
 
     @pytest.fixture
     def temp_dir(self):
+        clear_scan_cache()  # Ensure clean state
         with tempfile.TemporaryDirectory() as tmpdir:
             yield Path(tmpdir)
 
@@ -185,6 +188,50 @@ class TestCountMatchesDeletion:
         # Should count the 2 files in disabled setlist (actual disk size)
         assert stats.chart_count == 2
         assert stats.chart_size == 500  # 200 + 300
+
+    def test_empty_folder_doesnt_crash(self, temp_dir):
+        """Empty folder should be handled gracefully."""
+        folder_path = temp_dir / "EmptyDrive"
+        folder_path.mkdir()
+
+        folders = [{"folder_id": "123", "name": "EmptyDrive", "files": []}]
+
+        stats = count_purgeable_detailed(folders, temp_dir, user_settings=None)
+
+        assert stats.chart_count == 0
+        assert stats.extra_file_count == 0
+
+    def test_disabled_setlist_with_nested_structure(self, temp_dir):
+        """Disabled setlist detection should work with nested folder structures."""
+        folder_path = temp_dir / "TestDrive"
+        folder_path.mkdir()
+
+        # Create nested structure in disabled setlist
+        disabled = folder_path / "DisabledSetlist" / "SubFolder" / "Chart"
+        disabled.mkdir(parents=True)
+        (disabled / "song.zip").write_bytes(b"x" * 100)
+
+        # Create file directly in disabled setlist root
+        (folder_path / "DisabledSetlist" / "root_file.txt").write_bytes(b"y" * 50)
+
+        folders = [{
+            "folder_id": "123",
+            "name": "TestDrive",
+            "files": [
+                {"path": "DisabledSetlist/SubFolder/Chart/song.zip", "size": 100, "md5": "a"},
+                {"path": "DisabledSetlist/root_file.txt", "size": 50, "md5": "b"},
+            ]
+        }]
+
+        mock_settings = Mock()
+        mock_settings.is_drive_enabled.return_value = True
+        mock_settings.get_disabled_subfolders.return_value = {"DisabledSetlist"}
+
+        stats = count_purgeable_detailed(folders, temp_dir, mock_settings)
+
+        # Both files should be counted (nested + root)
+        assert stats.chart_count == 2
+        assert stats.chart_size == 150  # 100 + 50
 
 
 class TestPurgeStatsTotal:
