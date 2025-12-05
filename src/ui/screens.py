@@ -4,6 +4,7 @@ User interface components for DM Chart Sync.
 Handles menu display, user input, and terminal operations.
 """
 
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -168,23 +169,14 @@ def compute_main_menu_cache(
     if not download_path or not folders:
         return cache
 
-    # Calculate global sync status for subtitle
-    enabled_status = get_sync_status(folders, download_path, user_settings)
+    # Accumulate global stats from per-folder stats (avoids N+1 scanning)
+    global_status = SyncStatus()
+    global_purge_count = 0
+    global_purge_size = 0
 
-    # Calculate purge/excess count (charts from disabled drives/setlists)
-    purge_count, purge_size = count_purgeable_files(folders, download_path, user_settings)
+    cache_start = time.time()
 
-    # Format subtitle with excess shown in red
-    cache.subtitle = format_sync_subtitle(
-        enabled_status,
-        unit="charts",
-        excess_size=purge_size
-    )
-
-    if purge_count > 0:
-        cache.purge_desc = f"{Colors.RED}{purge_count} files, {format_size(purge_size)}{Colors.MUTED}"
-
-    # Calculate per-folder stats
+    # Calculate per-folder stats in a single pass
     for folder in folders:
         folder_id = folder.get("folder_id", "")
         folder_name = folder.get("name", "")
@@ -199,11 +191,27 @@ def compute_main_menu_cache(
             cache.folder_stats[folder_id] = "not yet scanned"
             continue
 
+        folder_start = time.time()
+
         # Get sync status for this folder (enabled only)
         status = get_sync_status([folder], download_path, user_settings)
 
         # Get excess/purgeable count for this folder
         folder_purge_count, folder_purge_size = count_purgeable_files([folder], download_path, user_settings)
+
+        folder_time = time.time() - folder_start
+        if folder_time > 1.0:  # Only log if > 1 second
+            print(f"  [perf] {folder_name}: {folder_time:.1f}s")
+
+        # Accumulate into global totals
+        global_status.total_charts += status.total_charts
+        global_status.synced_charts += status.synced_charts
+        global_status.total_size += status.total_size
+        global_status.synced_size += status.synced_size
+        if status.is_actual_charts:
+            global_status.is_actual_charts = True
+        global_purge_count += folder_purge_count
+        global_purge_size += folder_purge_size
 
         # Show charts with excess prefix if applicable
         # Use "archives" for custom folders before extraction, "charts" after we've scanned actual content
@@ -227,6 +235,16 @@ def compute_main_menu_cache(
 
         cache.folder_stats[folder_id] = ", ".join(stats_parts) if stats_parts else None
 
+    # Format global subtitle with accumulated stats
+    cache.subtitle = format_sync_subtitle(
+        global_status,
+        unit="charts",
+        excess_size=global_purge_size
+    )
+
+    if global_purge_count > 0:
+        cache.purge_desc = f"{Colors.RED}{global_purge_count} files, {format_size(global_purge_size)}{Colors.MUTED}"
+
     # Calculate group enabled counts
     if drives_config:
         for group_name in drives_config.get_groups():
@@ -236,6 +254,10 @@ def compute_main_menu_cache(
                 if (user_settings.is_drive_enabled(d.folder_id) if user_settings else True)
             )
             cache.group_enabled_counts[group_name] = enabled_count
+
+    total_time = time.time() - cache_start
+    if total_time > 2.0:  # Only log if > 2 seconds
+        print(f"  [perf] Menu cache computed in {total_time:.1f}s")
 
     return cache
 

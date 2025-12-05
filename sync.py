@@ -9,6 +9,7 @@ manifest, eliminating the need for users to scan Google Drive.
 import argparse
 import os
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -92,7 +93,11 @@ class SyncApp:
                 print("Loading local manifest...")
             else:
                 print("Fetching folder list...")
+        fetch_start = time.time()
         manifest_data = fetch_manifest(use_local=self.use_local_manifest)
+        fetch_time = time.time() - fetch_start
+        if fetch_time > 2.0 and not quiet:
+            print(f"  [perf] Manifest fetched in {fetch_time:.1f}s")
 
         # Filter out hidden drives
         hidden_ids = {d.folder_id for d in self.drives_config.drives if d.hidden}

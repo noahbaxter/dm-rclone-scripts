@@ -821,12 +821,18 @@ def find_partial_downloads(base_path: Path) -> list:
     return partial_files
 
 
-def find_extra_files(folder: dict, base_path: Path) -> list:
+def find_extra_files(folder: dict, base_path: Path, local_files: dict = None) -> list:
     """
     Find local files not in the manifest.
 
     For archive charts, if check.txt exists with matching MD5, the entire
     chart folder is considered valid (extracted contents are expected).
+
+    Args:
+        folder: Folder dict from manifest
+        base_path: Base download path
+        local_files: Optional pre-scanned local files dict from _scan_local_files().
+                     If not provided, will scan (but prefer passing cached data).
 
     Returns list of (Path, size) tuples.
     """
@@ -835,13 +841,22 @@ def find_extra_files(folder: dict, base_path: Path) -> list:
         return []
 
     folder_path = base_path / folder["name"]
+
+    # Use cached local_files if provided, otherwise scan
+    if local_files is None:
+        local_files = _scan_local_files(folder_path)
+    if not local_files:
+        return []
+
     # CRITICAL: Use sanitized paths to match actual filenames on disk
     # Downloads use sanitize_path() which replaces illegal chars (: ? * etc.)
-    expected_paths = {folder_path / sanitize_path(f["path"]) for f in manifest_files}
+    expected_paths = {sanitize_path(f["path"]) for f in manifest_files}
 
     # Build a set of chart folders that have valid check.txt (synced archive charts)
     # These folders should be entirely skipped during purge
-    valid_archive_folders = set()
+    valid_archive_prefixes = set()  # Store as relative path prefixes for efficient checking
+    checksums = _scan_checksums(folder_path)
+
     for f in manifest_files:
         file_path = f.get("path", "")
         file_name = file_path.split("/")[-1].lower() if "/" in file_path else file_path.lower()
@@ -852,35 +867,33 @@ def find_extra_files(folder: dict, base_path: Path) -> list:
             sanitized = sanitize_path(file_path)
             if "/" in file_path:
                 parent = "/".join(sanitized.split("/")[:-1])
-                chart_folder = folder_path / parent
             else:
                 # Root-level archive - check.txt is in folder root
-                chart_folder = folder_path
+                parent = ""
             # Get original archive name (not lowercased) for check.txt lookup
             archive_name = sanitized.split("/")[-1] if "/" in sanitized else sanitized
-            stored_md5 = read_checksum(chart_folder, archive_name)
-            if stored_md5 == file_md5:
-                # This archive has been extracted - mark folder as valid
-                valid_archive_folders.add(chart_folder)
+            # Use cached checksums instead of reading each file
+            is_synced, _ = _check_archive_synced(checksums, parent, archive_name, file_md5)
+            if is_synced:
+                # This archive has been extracted - mark folder prefix as valid
+                valid_archive_prefixes.add(parent + "/" if parent else "")
 
-    # Get all unexpected files
-    all_extras = find_unexpected_files_with_sizes(folder_path, expected_paths)
-
-    # Filter out files that are inside valid archive chart folders
+    # Find extra files using cached local_files dict
     filtered_extras = []
-    for file_path, size in all_extras:
+    for rel_path, size in local_files.items():
+        # Skip if in expected paths
+        if rel_path in expected_paths:
+            continue
+
         # Check if this file is inside a valid archive folder
         is_in_valid_archive = False
-        for valid_folder in valid_archive_folders:
-            try:
-                file_path.relative_to(valid_folder)
+        for valid_prefix in valid_archive_prefixes:
+            if valid_prefix and rel_path.startswith(valid_prefix):
                 is_in_valid_archive = True
                 break
-            except ValueError:
-                continue
 
         if not is_in_valid_archive:
-            filtered_extras.append((file_path, size))
+            filtered_extras.append((folder_path / rel_path, size))
 
     return filtered_extras
 
@@ -967,51 +980,43 @@ def count_purgeable_detailed(folders: list, base_path: Path, user_settings=None)
         if not folder_path.exists():
             continue
 
+        # Use cached local file scan (same cache as get_sync_status)
+        local_files = _scan_local_files(folder_path)
+        if not local_files:
+            continue
+
         drive_enabled = user_settings.is_drive_enabled(folder_id) if user_settings else True
 
         if not drive_enabled:
             # Drive is disabled - count ALL local files as "charts" (entire drive content)
-            for f in folder_path.rglob("*"):
-                if f.is_file():
-                    try:
-                        stats.chart_count += 1
-                        stats.chart_size += f.stat().st_size
-                    except OSError:
-                        stats.chart_count += 1  # Count file even if we can't stat it
+            for rel_path, size in local_files.items():
+                stats.chart_count += 1
+                stats.chart_size += size
             continue
 
         # Drive is enabled - count files in disabled setlists + extra files separately
-        setlist_files = []  # Files from disabled setlists (charts)
+        disabled_setlist_paths = set()  # Track paths in disabled setlists
 
         # Get disabled setlists
         disabled_setlists = user_settings.get_disabled_subfolders(folder_id) if user_settings else set()
 
-        # Count files in disabled setlists (these are chart files)
-        for setlist_name in disabled_setlists:
-            setlist_path = folder_path / setlist_name
-            if setlist_path.exists():
-                for f in setlist_path.rglob("*"):
-                    if f.is_file():
-                        try:
-                            setlist_files.append((f, f.stat().st_size))
-                        except OSError:
-                            setlist_files.append((f, 0))
-
-        # Extra files not in manifest
-        extras = find_extra_files(folder, base_path)
-
-        # Deduplicate setlist files
-        seen = set()
-        for f, size in setlist_files:
-            if f not in seen:
-                seen.add(f)
+        # Count files in disabled setlists using cached local_files
+        for rel_path, size in local_files.items():
+            # Check if this file is in a disabled setlist (first path component)
+            first_slash = rel_path.find("/")
+            setlist_name = rel_path[:first_slash] if first_slash != -1 else rel_path
+            if setlist_name in disabled_setlists:
+                disabled_setlist_paths.add(rel_path)
                 stats.chart_count += 1
                 stats.chart_size += size
 
-        # Add extras (don't overlap with setlist files)
+        # Extra files not in manifest (pass cached local_files to avoid rescan)
+        extras = find_extra_files(folder, base_path, local_files)
+
+        # Add extras (don't overlap with disabled setlist files)
         for f, size in extras:
-            if f not in seen:
-                seen.add(f)
+            rel_path = str(f.relative_to(folder_path))
+            if rel_path not in disabled_setlist_paths:
                 stats.extra_file_count += 1
                 stats.extra_file_size += size
 
