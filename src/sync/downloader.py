@@ -635,6 +635,50 @@ class DownloadTask:
     is_archive: bool = False  # If True, needs extraction after download
 
 
+def sort_tasks_by_chart_size(
+    tasks: List[DownloadTask]
+) -> List[DownloadTask]:
+    """
+    Sort download tasks by chart size (smallest first), keeping chart files together.
+
+    Prioritizes downloading more charts over fewer large charts in a sync session.
+
+    Args:
+        tasks: List of DownloadTask objects to sort
+
+    Returns:
+        Sorted list of DownloadTask objects
+    """
+    from collections import defaultdict
+
+    # Group tasks by their chart
+    # Archives (files starting with _download_) are their own chart
+    # Regular files are grouped by parent folder
+    folder_tasks: defaultdict[str, List[DownloadTask]] = defaultdict(list)
+    folder_sizes: defaultdict[str, int] = defaultdict(int)
+
+    for task in tasks:
+        if task.local_path.name.startswith("_download_"):
+            # Archive is its own chart - use full path as key
+            folder = str(task.local_path)
+        else:
+            # Regular file - group by parent folder
+            folder = str(task.local_path.parent)
+
+        folder_tasks[folder].append(task)
+        folder_sizes[folder] += task.size
+
+    # Sort folders by total size (smallest first)
+    sorted_folders = sorted(folder_tasks.keys(), key=lambda f: folder_sizes[f])
+
+    # Flatten back to task list, preserving folder grouping
+    sorted_tasks: List[DownloadTask] = []
+    for folder in sorted_folders:
+        sorted_tasks.extend(folder_tasks[folder])
+
+    return sorted_tasks
+
+
 class FileDownloader:
     """
     Async file downloader with progress tracking.
@@ -1157,6 +1201,11 @@ class FileDownloader:
         if show_progress:
             progress = FolderProgress(total_files=len(tasks), total_folders=0)
             progress.register_folders(tasks)
+
+            # Sort tasks by chart size
+            # Smallest charts first to maximize total charts downloaded per sync, keeping chart files together
+            tasks = sort_tasks_by_chart_size(tasks)
+
             print(f"  Downloading {len(tasks)} files across {progress.total_charts} charts...")
             print(f"  (max {self.max_workers} concurrent downloads, press ESC to cancel)")
             print()
