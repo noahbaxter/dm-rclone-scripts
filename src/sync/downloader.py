@@ -13,6 +13,7 @@ import sys
 import shutil
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 import zipfile
@@ -393,6 +394,33 @@ def get_folder_size(folder_path: Path) -> int:
     return total
 
 
+def _move_extracted_contents(temp_folder: Path, dest_folder: Path) -> None:
+    """
+    Move extracted contents from temp folder to destination.
+    
+    Handles merging with existing files in dest_folder.
+    """
+    for item in temp_folder.iterdir():
+        dest_item = dest_folder / item.name
+        if item.is_dir():
+            if dest_item.exists():
+                # Merge directories recursively
+                _move_extracted_contents(item, dest_item)
+                # Remove the now-empty source directory
+                try:
+                    item.rmdir()
+                except OSError:
+                    pass  # Not empty, will be cleaned up with temp folder
+            else:
+                # Move entire directory
+                shutil.move(str(item), str(dest_item))
+        else:
+            # Move file, overwriting if exists
+            if dest_item.exists():
+                dest_item.unlink()
+            shutil.move(str(item), str(dest_item))
+
+
 def extract_archive(archive_path: Path, dest_folder: Path) -> Tuple[bool, str]:
     """
     Extract archive with automatic fallback to CLI tools on errors.
@@ -401,6 +429,8 @@ def extract_archive(archive_path: Path, dest_folder: Path) -> Tuple[bool, str]:
     1. Try Python library first (faster, no subprocess overhead)
     2. On ANY failure, immediately fall back to CLI tools
     3. CLI tools handle encoding issues gracefully via errors='replace'
+    4. On Windows, extract to short temp path first to avoid MAX_PATH issues
+       with CLI tools that don't support long paths
 
     Returns (success, error_message).
     """
@@ -425,10 +455,25 @@ def extract_archive(archive_path: Path, dest_folder: Path) -> Tuple[bool, str]:
         library_error = str(e)
         # Fall through to CLI fallback
 
-    # CLI fallback (handles encoding issues gracefully)
-    cli_success, cli_error = _extract_with_cli(archive_path, dest_folder)
-    if cli_success:
-        return True, ""
+    # CLI fallback - use short temp path on Windows to avoid MAX_PATH issues
+    # CLI tools like unrar don't respect LongPathsEnabled registry setting
+    if os.name == 'nt' and len(str(dest_folder)) > 100:
+        # Use a short temp path for extraction, then move contents
+        temp_dir = tempfile.mkdtemp(prefix="dm_")
+        try:
+            cli_success, cli_error = _extract_with_cli(archive_path, Path(temp_dir))
+            if cli_success:
+                # Move extracted contents to final destination
+                _move_extracted_contents(Path(temp_dir), dest_folder)
+                return True, ""
+        finally:
+            # Clean up temp directory
+            shutil.rmtree(temp_dir, ignore_errors=True)
+    else:
+        # Direct extraction for short paths or non-Windows
+        cli_success, cli_error = _extract_with_cli(archive_path, dest_folder)
+        if cli_success:
+            return True, ""
 
     # Both failed - check if we have any CLI tools available
     if not UNIVERSAL_CLI_TOOL and not UNRAR_CLI:
