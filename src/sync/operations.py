@@ -1020,11 +1020,11 @@ def count_purgeable_detailed(folders: list, base_path: Path, user_settings=None)
                 stats.extra_file_count += 1
                 stats.extra_file_size += size
 
-    # Also count partial downloads (interrupted archive downloads)
-    partial_files = find_partial_downloads(base_path)
-    if partial_files:
-        stats.partial_count = len(partial_files)
-        stats.partial_size = sum(size for _, size in partial_files)
+        # Count partial downloads (interrupted archive downloads) within this folder
+        partial_files = find_partial_downloads(folder_path)
+        if partial_files:
+            stats.partial_count += len(partial_files)
+            stats.partial_size += sum(size for _, size in partial_files)
 
     return stats
 
