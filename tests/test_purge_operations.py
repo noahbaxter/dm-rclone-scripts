@@ -234,6 +234,32 @@ class TestCountMatchesDeletion:
         assert stats.chart_size == 150  # 100 + 50
 
 
+class TestPartialDownloadsPerFolder:
+    """Partials should only count for the folder they're in, not globally."""
+
+    def test_partials_not_shared_across_folders(self):
+        """DriveB should not inherit DriveA's partial downloads."""
+        clear_scan_cache()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            temp_dir = Path(tmpdir)
+
+            # DriveA has partials, DriveB doesn't
+            (temp_dir / "DriveA" / "Setlist").mkdir(parents=True)
+            (temp_dir / "DriveA" / "Setlist" / "_download_x.7z").write_bytes(b"x" * 100)
+            (temp_dir / "DriveB" / "Setlist").mkdir(parents=True)
+
+            folder_a = {"folder_id": "a", "name": "DriveA", "files": []}
+            folder_b = {"folder_id": "b", "name": "DriveB", "files": []}
+
+            stats_a = count_purgeable_detailed([folder_a], temp_dir, user_settings=None)
+            assert stats_a.partial_count == 1
+
+            clear_scan_cache()
+
+            stats_b = count_purgeable_detailed([folder_b], temp_dir, user_settings=None)
+            assert stats_b.partial_count == 0  # Bug: was 1 before fix
+
+
 class TestPurgeStatsTotal:
     """Tests for PurgeStats total calculations."""
 

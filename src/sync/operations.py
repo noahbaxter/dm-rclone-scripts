@@ -980,6 +980,13 @@ def count_purgeable_detailed(folders: list, base_path: Path, user_settings=None)
         if not folder_path.exists():
             continue
 
+        # Count partial downloads (interrupted archive downloads) within this folder
+        # Do this BEFORE checking drive enabled status - partials should always be counted/purged
+        partial_files = find_partial_downloads(folder_path)
+        if partial_files:
+            stats.partial_count += len(partial_files)
+            stats.partial_size += sum(size for _, size in partial_files)
+
         # Use cached local file scan (same cache as get_sync_status)
         local_files = _scan_local_files(folder_path)
         if not local_files:
@@ -1019,12 +1026,6 @@ def count_purgeable_detailed(folders: list, base_path: Path, user_settings=None)
             if rel_path not in disabled_setlist_paths:
                 stats.extra_file_count += 1
                 stats.extra_file_size += size
-
-    # Also count partial downloads (interrupted archive downloads)
-    partial_files = find_partial_downloads(base_path)
-    if partial_files:
-        stats.partial_count = len(partial_files)
-        stats.partial_size = sum(size for _, size in partial_files)
 
     return stats
 
