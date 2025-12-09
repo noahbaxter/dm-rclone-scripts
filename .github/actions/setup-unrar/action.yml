@@ -1,0 +1,24 @@
+name: 'Setup UnRAR Library'
+description: 'Build or download UnRAR library for the current platform'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Build UnRAR library (macOS)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        curl -LO https://www.rarlab.com/rar/unrarsrc-7.2.2.tar.gz
+        tar -xzf unrarsrc-7.2.2.tar.gz
+        cd unrar && make lib
+        mkdir -p ../libs/bin
+        cp libunrar.so ../libs/bin/libunrar.dylib
+
+    - name: Download UnRAR DLL (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        Invoke-WebRequest -Uri "https://www.rarlab.com/rar/unrardll-720b2.exe" -OutFile "UnRARDLL.exe"
+        7z x UnRARDLL.exe -ounrar_dll -y
+        New-Item -ItemType Directory -Force -Path "libs/bin"
+        Copy-Item "unrar_dll/x64/UnRAR64.dll" -Destination "libs/bin/UnRAR64.dll"

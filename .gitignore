@@ -36,3 +36,6 @@ dist/
 *.spec
 dm-sync-macos
 dm-sync.exe
+
+# UnRAR library (built in CI)
+libs/

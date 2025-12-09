@@ -12,7 +12,6 @@ import ssl
 import sys
 import shutil
 import signal
-import subprocess
 import threading
 import time
 import zipfile
@@ -55,69 +54,40 @@ try:
 except ImportError:
     HAS_7Z = False
 
+# Set up UnRAR library path for bundled binaries
+def _setup_unrar_library():
+    """Configure rarfile to use bundled UnRAR library."""
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        # Running from PyInstaller bundle
+        bundle_dir = sys._MEIPASS
+        if os.name == 'nt':
+            lib_path = os.path.join(bundle_dir, 'UnRAR64.dll')
+        else:
+            lib_path = os.path.join(bundle_dir, 'libunrar.dylib')
+        if os.path.exists(lib_path):
+            os.environ['UNRAR_LIB_PATH'] = lib_path
+    else:
+        # Development mode - check for libs folder
+        dev_libs = Path(__file__).parent.parent.parent / 'libs' / 'bin'
+        if os.name == 'nt':
+            lib_path = dev_libs / 'UnRAR64.dll'
+        else:
+            lib_path = dev_libs / 'libunrar.dylib'
+        if lib_path.exists():
+            os.environ['UNRAR_LIB_PATH'] = str(lib_path)
+
+_setup_unrar_library()
+
 try:
-    from unrar import rarfile as unrar_rarfile
-    # Test that the library is actually available
-    unrar_rarfile.RarFile
+    import rarfile
     HAS_RAR_LIB = True
-except (ImportError, LookupError):
+except ImportError:
     HAS_RAR_LIB = False
+    rarfile = None
 
-# Detect universal archive CLI tools (can handle ZIP, 7z, RAR, and more)
-# Priority: 7z (most common on Windows) > NanaZipC (Windows alt) > unar (macOS/Linux)
-UNIVERSAL_CLI_TOOL = None
-for tool in ["7z", "NanaZipC", "unar"]:
-    if shutil.which(tool):
-        UNIVERSAL_CLI_TOOL = tool
-        break
-
-# Detect RAR-specific CLI tool (faster than universal tools for RAR files)
-UNRAR_CLI = shutil.which("unrar")
 
 # Checksum file for tracking archive chart state
 CHECKSUM_FILE = "check.txt"
-
-
-def _run_extract_cmd(cmd: list, tool_name: str) -> Tuple[bool, str]:
-    """Run extraction command with encoding-safe output handling."""
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            encoding='utf-8',
-            errors='replace'  # Replace invalid bytes with replacement char
-        )
-        if result.returncode != 0:
-            return False, f"{tool_name} failed: {result.stderr.strip()}"
-        return True, ""
-    except Exception as e:
-        return False, f"{tool_name} error: {e}"
-
-
-def _extract_with_cli(archive_path: Path, dest_folder: Path) -> Tuple[bool, str]:
-    """Extract any archive using CLI tools (encoding-safe fallback)."""
-    ext = archive_path.suffix.lower()
-
-    # For RAR files, prefer dedicated unrar tool (faster)
-    if ext == ".rar" and UNRAR_CLI:
-        return _run_extract_cmd(
-            [UNRAR_CLI, "x", "-o+", str(archive_path), str(dest_folder) + "/"],
-            "unrar"
-        )
-
-    # Universal tools handle ZIP, 7z, RAR, and more
-    if UNIVERSAL_CLI_TOOL in ("7z", "NanaZipC"):
-        return _run_extract_cmd(
-            [UNIVERSAL_CLI_TOOL, "x", str(archive_path), f"-o{dest_folder}", "-y"],
-            UNIVERSAL_CLI_TOOL
-        )
-    elif UNIVERSAL_CLI_TOOL == "unar":
-        return _run_extract_cmd(
-            ["unar", "-f", "-o", str(dest_folder), str(archive_path)],
-            "unar"
-        )
-
-    return False, "No CLI extraction tool available"
 
 
 # Platform-specific imports for ESC detection
@@ -395,57 +365,37 @@ def get_folder_size(folder_path: Path) -> int:
 
 def extract_archive(archive_path: Path, dest_folder: Path) -> Tuple[bool, str]:
     """
-    Extract archive with automatic fallback to CLI tools on errors.
+    Extract archive using Python libraries.
 
-    Strategy:
-    1. Try Python library first (faster, no subprocess overhead)
-    2. On ANY failure, immediately fall back to CLI tools
-    3. CLI tools handle encoding issues gracefully via errors='replace'
+    Supports:
+    - ZIP: zipfile (stdlib)
+    - 7z: py7zr
+    - RAR: rarfile with bundled UnRAR library
 
     Returns (success, error_message).
     """
     ext = archive_path.suffix.lower()
-    library_error = None
-
-    # Try Python library first (faster than subprocess)
     try:
         if ext == ".zip":
             with zipfile.ZipFile(archive_path, 'r') as zf:
                 zf.extractall(dest_folder)
             return True, ""
-        elif ext == ".7z" and HAS_7Z:
+        elif ext == ".7z":
+            if not HAS_7Z:
+                return False, "py7zr library not available"
             with py7zr.SevenZipFile(archive_path, 'r') as sz:
                 sz.extractall(dest_folder)
             return True, ""
-        elif ext == ".rar" and HAS_RAR_LIB:
-            with unrar_rarfile.RarFile(str(archive_path)) as rf:
+        elif ext == ".rar":
+            if not HAS_RAR_LIB:
+                return False, "rarfile library not available"
+            with rarfile.RarFile(str(archive_path)) as rf:
                 rf.extractall(str(dest_folder))
             return True, ""
-    except Exception as e:
-        library_error = str(e)
-        # Fall through to CLI fallback
-
-    # CLI fallback (handles encoding issues gracefully)
-    cli_success, cli_error = _extract_with_cli(archive_path, dest_folder)
-    if cli_success:
-        return True, ""
-
-    # Both failed - check if we have any CLI tools available
-    if not UNIVERSAL_CLI_TOOL and not UNRAR_CLI:
-        # No CLI tools - provide platform-specific install guidance
-        if os.name == 'nt':
-            return False, "Install 7-Zip from https://7-zip.org and add to PATH"
-        elif sys.platform == 'darwin':
-            return False, "Install unar: brew install unar"
         else:
-            return False, "Install p7zip: sudo apt install p7zip-full"
-
-    # CLI was available but failed - return most useful error
-    if cli_error and cli_error != "No CLI extraction tool available":
-        return False, cli_error
-    if library_error:
-        return False, library_error
-    return False, f"Failed to extract {ext} archive"
+            return False, f"Unsupported archive format: {ext}"
+    except Exception as e:
+        return False, str(e)
 
 
 def delete_video_files(folder_path: Path) -> int:
@@ -559,7 +509,7 @@ class FolderProgress(ProgressTracker):
             self.completed_charts += 1
             self._print_item_complete(archive_name)
 
-    def file_completed(self, local_path: Path, is_archive: bool = False) -> tuple[str, bool] | None:
+    def file_completed(self, local_path: Path) -> tuple[str, bool] | None:
         """
         Mark a file as completed. Returns (folder_name, is_chart) if folder is now complete.
         For archives, returns None (they're reported via archive_completed instead).
@@ -846,7 +796,6 @@ class FileDownloader:
             download_start = time.time()
             last_progress_time = download_start
             progress_interval = 1.5  # Report every 1.5 seconds
-            progress_shown = False  # Track if we've shown progress for this file
             time_threshold = 2.0  # Only show progress after file has been downloading this long
 
             # Get display name (strip _download_ prefix if present)
@@ -866,7 +815,6 @@ class FileDownloader:
                             elapsed = now - download_start
                             if elapsed >= time_threshold and now - last_progress_time >= progress_interval:
                                 last_progress_time = now
-                                progress_shown = True
                                 pct = (downloaded_bytes / total_size * 100) if total_size > 0 else 0
                                 size_mb = downloaded_bytes / (1024 * 1024)
                                 total_mb = total_size / (1024 * 1024)
@@ -1018,7 +966,6 @@ class FileDownloader:
         semaphore = asyncio.Semaphore(effective_workers)
 
         # Limit extraction concurrency to prevent "too many open files" errors
-        # Extractions spawn subprocesses that open many file handles
         extract_semaphore = threading.Semaphore(2)
 
         def process_archive_limited(task: DownloadTask) -> Tuple[bool, str]:

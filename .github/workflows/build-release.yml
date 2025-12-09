@@ -1,11 +1,10 @@
-name: Build and Release
+name: CI
 
 on:
-  # Build on every push to main
   push:
-    branches:
-      - main
-  # Manual trigger for releasing
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       release:
@@ -22,7 +21,41 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            name: macos
+          - os: windows-latest
+            name: windows
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup UnRAR library
+        uses: ./.github/actions/setup-unrar
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run tests
+        run: pytest tests/ -v
+
   build:
+    needs: test
+    if: github.ref == 'refs/heads/main'
     strategy:
       matrix:
         include:
@@ -62,6 +95,9 @@ jobs:
           fi
         shell: bash
 
+      - name: Setup UnRAR library
+        uses: ./.github/actions/setup-unrar
+
       - name: Build executable (macOS)
         if: matrix.name == 'macos'
         run: |
@@ -71,7 +107,9 @@ jobs:
             --add-data "drives.json:." \
             --add-data "VERSION:." \
             --add-data "$CERTIFI_PATH:certifi" \
+            --add-binary "libs/bin/libunrar.dylib:." \
             --hidden-import certifi \
+            --hidden-import rarfile \
             sync.py
 
       - name: Build executable (Windows)
@@ -83,7 +121,9 @@ jobs:
             --add-data "drives.json;." `
             --add-data "VERSION;." `
             --add-data "$CERTIFI_PATH;certifi" `
+            --add-binary "libs/bin/UnRAR64.dll;." `
             --hidden-import certifi `
+            --hidden-import rarfile `
             sync.py
         shell: pwsh
 
@@ -96,7 +136,6 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
-    # Only run release job when manually triggered with release=true
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.release == 'true'
 
     steps:

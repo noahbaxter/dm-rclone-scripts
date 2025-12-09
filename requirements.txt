@@ -7,7 +7,7 @@ google-auth-oauthlib>=1.0.0
 
 # Archive extraction support
 py7zr>=0.20.0  # For .7z files
-unrar>=0.4  # For .rar files (uses UnRAR library)
+rarfile>=4.0  # For .rar files (uses UnRAR library)
 
 # Development/build
 pytest>=7.0.0
