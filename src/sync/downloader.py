@@ -1180,8 +1180,8 @@ class FileDownloader:
 
         return downloaded, 0, permanent_errors, rate_limited, cancelled
 
-    @staticmethod
     def filter_existing(
+        self,
         files: List[dict],
         local_base: Path,
     ) -> Tuple[List[DownloadTask], int, List[str]]:
@@ -1246,6 +1246,11 @@ class FileDownloader:
             else:
                 # Regular file: check if exists with matching size
                 local_path = local_base / file_path
+
+                # Skip video files if delete_videos is enabled
+                if self.delete_videos and Path(file_name).suffix.lower() in VIDEO_EXTENSIONS:
+                    skipped += 1
+                    continue
 
                 # Check for long path on Windows
                 if is_windows and len(str(local_path)) >= WINDOWS_MAX_PATH:

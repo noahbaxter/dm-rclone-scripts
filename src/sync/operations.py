@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Union
 
-from ..constants import CHART_MARKERS
+from ..constants import CHART_MARKERS, VIDEO_EXTENSIONS
 from ..file_ops import find_unexpected_files_with_sizes
 from ..stats import clear_local_stats_cache, get_best_stats
 from ..utils import format_size, format_duration, print_progress, print_long_path_warning, sanitize_path, dedupe_files_by_newest
@@ -939,14 +939,17 @@ class PurgeStats:
     # Partial downloads
     partial_count: int = 0
     partial_size: int = 0
+    # Video files (when delete_videos is enabled)
+    video_count: int = 0
+    video_size: int = 0
 
     @property
     def total_files(self) -> int:
-        return self.chart_count + self.extra_file_count + self.partial_count
+        return self.chart_count + self.extra_file_count + self.partial_count + self.video_count
 
     @property
     def total_size(self) -> int:
-        return self.chart_size + self.extra_file_size + self.partial_size
+        return self.chart_size + self.extra_file_size + self.partial_size + self.video_size
 
 
 def count_purgeable_files(folders: list, base_path: Path, user_settings=None) -> tuple[int, int]:
@@ -1020,12 +1023,27 @@ def count_purgeable_detailed(folders: list, base_path: Path, user_settings=None)
         # Extra files not in manifest (pass cached local_files to avoid rescan)
         extras = find_extra_files(folder, base_path, local_files)
 
-        # Add extras (don't overlap with disabled setlist files)
+        # Track extra file paths to avoid double-counting
+        extra_paths = set()
         for f, size in extras:
             rel_path = str(f.relative_to(folder_path))
+            extra_paths.add(rel_path)
             if rel_path not in disabled_setlist_paths:
                 stats.extra_file_count += 1
                 stats.extra_file_size += size
+
+        # Count video files when delete_videos is enabled
+        # These may be in valid archive folders (not caught by find_extra_files)
+        delete_videos = user_settings.delete_videos if user_settings else True
+        if delete_videos:
+            for rel_path, size in local_files.items():
+                # Skip if already counted elsewhere
+                if rel_path in disabled_setlist_paths or rel_path in extra_paths:
+                    continue
+                # Check if it's a video file
+                if Path(rel_path).suffix.lower() in VIDEO_EXTENSIONS:
+                    stats.video_count += 1
+                    stats.video_size += size
 
     return stats
 
@@ -1039,6 +1057,7 @@ def purge_all_folders(folders: list, base_path: Path, user_settings=None):
     - Files from disabled drives
     - Files from disabled setlists
     - Partial downloads (interrupted archive downloads with _download_ prefix)
+    - Video files (when delete_videos is enabled)
 
     Args:
         folders: List of folder dicts from manifest
@@ -1099,6 +1118,16 @@ def purge_all_folders(folders: list, base_path: Path, user_settings=None):
         # Also find extra files not in manifest (for enabled setlists)
         extras = find_extra_files(folder, base_path)
         files_to_purge.extend(extras)
+
+        # Find video files when delete_videos is enabled
+        delete_videos = user_settings.delete_videos if user_settings else True
+        if delete_videos:
+            for f in folder_path.rglob("*"):
+                if f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS:
+                    try:
+                        files_to_purge.append((f, f.stat().st_size))
+                    except Exception:
+                        files_to_purge.append((f, 0))
 
         # Deduplicate
         seen = set()
