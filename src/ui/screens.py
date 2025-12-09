@@ -10,7 +10,7 @@ from pathlib import Path
 
 from ..utils import format_size, clear_screen, dedupe_files_by_newest
 from ..config import UserSettings, DrivesConfig, extract_subfolders_from_manifest
-from ..sync.operations import get_sync_status, count_purgeable_files, SyncStatus
+from ..sync import get_sync_status, count_purgeable_files, SyncStatus
 from ..stats import get_best_stats, get_scanner, get_overrides
 from .menu import Menu, MenuItem, MenuDivider, MenuGroupHeader, MenuResult, print_header
 from .colors import Colors
@@ -435,7 +435,7 @@ def _compute_setlist_stats_from_files(folder: dict, dedupe: bool = True) -> dict
 
     Returns dict mapping setlist name to {archives: int, charts: int, total_size: int}
     """
-    from ..sync.downloader import is_archive_file
+    from ..sync.download_planner import is_archive_file
     from ..constants import CHART_MARKERS
 
     stats = {}

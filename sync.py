@@ -46,7 +46,7 @@ from src import (
     migrate_legacy_files,
 )
 from src.ui.keyboard import wait_with_skip
-from src.sync.operations import count_purgeable_detailed, clear_scan_cache, repair_all_checksums
+from src.sync import count_purgeable_detailed, clear_scan_cache, repair_all_checksums
 from src.drive.client import DriveClientConfig
 
 # ============================================================================
