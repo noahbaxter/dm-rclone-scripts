@@ -11,7 +11,13 @@ from pathlib import Path
 
 import pytest
 
-from src.sync.operations import find_extra_files, _scan_local_files, clear_scan_cache
+from src.sync import clear_cache
+from src.sync.purge_planner import find_extra_files
+from src.sync.cache import scan_local_files
+
+# Backwards compat
+_scan_local_files = scan_local_files
+clear_scan_cache = clear_cache
 
 
 class TestArchiveDetection:

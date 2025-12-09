@@ -7,7 +7,7 @@ from _helpers import REPO_ROOT
 
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.sync.operations import _scan_actual_charts_uncached
+from src.sync.cache import _scan_actual_charts_uncached
 from src.utils import format_size
 
 

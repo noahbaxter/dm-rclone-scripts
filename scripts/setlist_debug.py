@@ -10,7 +10,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from src.utils import format_size
 from src.constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS
 from src.ui.screens import extract_subfolders_from_manifest
-from src.sync.operations import count_purgeable_files
+from src.sync import count_purgeable_files
 from src.stats import get_best_stats
 
 

@@ -12,12 +12,15 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.sync.operations import (
-    find_extra_files,
+from src.sync import (
     count_purgeable_detailed,
     PurgeStats,
-    clear_scan_cache,
+    clear_cache,
 )
+from src.sync.purge_planner import find_extra_files
+
+# Backwards compat alias
+clear_scan_cache = clear_cache
 
 
 class TestFindExtraFilesSanitization:

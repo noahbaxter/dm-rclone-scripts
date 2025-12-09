@@ -11,12 +11,13 @@ from pathlib import Path
 
 import pytest
 
-from src.sync.operations import (
-    _scan_local_files,
-    _scan_checksums,
-    count_purgeable_files,
-    clear_scan_cache,
-)
+from src.sync import count_purgeable_files, clear_cache
+from src.sync.cache import scan_local_files, scan_checksums
+
+# Backwards compat
+_scan_local_files = scan_local_files
+_scan_checksums = scan_checksums
+clear_scan_cache = clear_cache
 
 
 class TestScanPerformance:
