@@ -53,6 +53,12 @@ def clear_scan_cache():
     """Clear the filesystem scan cache. Call after downloads or purges."""
     _scan_cache.clear()
     clear_local_stats_cache()  # Also clear the stats module cache
+    # Also clear setlist menu cache (imported lazily to avoid circular import)
+    try:
+        from ..ui.screens import _setlist_menu_cache
+        _setlist_menu_cache.invalidate()
+    except ImportError:
+        pass
 
 
 def clear_folder_cache(folder_path: Path):

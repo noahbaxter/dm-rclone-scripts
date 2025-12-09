@@ -315,6 +315,50 @@ def print_long_path_warning(count: int):
     print(f"    Set LongPathsEnabled to 1, then restart")
 
 
+# Cache the result since registry doesn't change during runtime
+_long_paths_enabled_cache: bool | None = None
+
+
+def is_windows_long_paths_enabled() -> bool:
+    """
+    Check if Windows long path support is enabled.
+    
+    On Windows, checks the registry key:
+    HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\FileSystem\\LongPathsEnabled
+    
+    Returns:
+        True if long paths are enabled (or not on Windows), False otherwise
+    """
+    global _long_paths_enabled_cache
+    
+    # Not Windows - no path length limit
+    if os.name != 'nt':
+        return True
+    
+    # Return cached result if available
+    if _long_paths_enabled_cache is not None:
+        return _long_paths_enabled_cache
+    
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\FileSystem",
+            0,
+            winreg.KEY_READ
+        )
+        try:
+            value, _ = winreg.QueryValueEx(key, "LongPathsEnabled")
+            _long_paths_enabled_cache = value == 1
+        finally:
+            winreg.CloseKey(key)
+    except (OSError, FileNotFoundError, PermissionError):
+        # Registry key doesn't exist or can't be read - assume not enabled
+        _long_paths_enabled_cache = False
+    
+    return _long_paths_enabled_cache
+
+
 def dedupe_files_by_newest(files: list) -> list:
     """
     Deduplicate files with same path, keeping only newest version.
