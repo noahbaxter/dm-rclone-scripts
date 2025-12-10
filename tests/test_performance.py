@@ -12,11 +12,11 @@ from pathlib import Path
 import pytest
 
 from src.sync import count_purgeable_files, clear_cache
-from src.sync.cache import scan_local_files, scan_checksums
+from src.sync.cache import scan_local_files
+from src.sync.sync_state import SyncState
 
 # Backwards compat
 _scan_local_files = scan_local_files
-_scan_checksums = scan_checksums
 clear_scan_cache = clear_cache
 
 
@@ -41,7 +41,7 @@ class TestScanPerformance:
                 (chart_folder / "notes.mid").write_bytes(b"x" * 100)
                 (chart_folder / "song.ogg").write_bytes(b"x" * 1000)
                 (chart_folder / "album.png").write_bytes(b"x" * 500)
-                (chart_folder / "check.txt").write_text('{"md5": "abc123", "size": 1600}')
+                (chart_folder / "extra.txt").write_bytes(b"x" * 50)
 
             yield base, folder_path
 
@@ -73,18 +73,6 @@ class TestScanPerformance:
         elapsed = time.time() - start
 
         assert len(result) == 2500, f"Expected 2500 files, got {len(result)}"
-        assert elapsed < 2.0, f"Scan took {elapsed:.1f}s, should be <2s"
-
-    def test_checksums_scan_reasonable_time(self, large_folder):
-        """Checksum scan of 500 check.txt files should complete in <2 seconds."""
-        base, folder_path = large_folder
-        clear_scan_cache()
-
-        start = time.time()
-        result = _scan_checksums(folder_path)
-        elapsed = time.time() - start
-
-        assert len(result) == 500, f"Expected 500 checksums, got {len(result)}"
         assert elapsed < 2.0, f"Scan took {elapsed:.1f}s, should be <2s"
 
 
@@ -154,9 +142,14 @@ class TestCountPurgeableUsesCache:
         cached_files = _scan_local_files(folder_path)
         assert len(cached_files) == 2, "Should have scanned 2 files"
 
+        # Set up sync_state tracking expected.txt
+        sync_state = SyncState(base)
+        sync_state.load()
+        sync_state.add_file("TestDrive/expected.txt", size=8)
+
         # count_purgeable should NOT rescan
         start = time.time()
-        count, size = count_purgeable_files([folder], base, None)
+        count, size = count_purgeable_files([folder], base, None, sync_state)
         elapsed = time.time() - start
 
         # Verify correctness: should find the extra file with correct size
@@ -169,8 +162,13 @@ class TestCountPurgeableUsesCache:
         base, folder = folder_with_manifest
         clear_scan_cache()
 
+        # Set up sync_state tracking expected.txt
+        sync_state = SyncState(base)
+        sync_state.load()
+        sync_state.add_file("TestDrive/expected.txt", size=8)
+
         # Call without pre-populating cache
-        count, size = count_purgeable_files([folder], base, None)
+        count, size = count_purgeable_files([folder], base, None, sync_state)
 
         # Should still find the extra file correctly
         assert count == 1, "Should find 1 extra file"
