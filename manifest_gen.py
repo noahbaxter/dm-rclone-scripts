@@ -34,8 +34,7 @@ from src import (
     print_progress,
 )
 from src.drive.client import DriveClientConfig
-from src.manifest import FolderEntry
-from src.charts import count_charts_in_files
+from src.manifest import FolderEntry, count_charts_in_files
 
 # ============================================================================
 # Configuration
