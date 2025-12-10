@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Callable, Optional, Union
 
 from ..drive import DriveClient, FolderScanner
-from ..utils import format_size, format_duration, print_progress, print_long_path_warning, dedupe_files_by_newest
+from ..core.formatting import format_size, format_duration, dedupe_files_by_newest
+from ..ui.terminal import print_progress, print_long_path_warning
 from ..ui.keyboard import wait_with_skip
 from .cache import clear_cache, clear_folder_cache
 from .download_planner import plan_downloads

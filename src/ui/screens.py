@@ -8,7 +8,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..utils import format_size, clear_screen, dedupe_files_by_newest
+from ..core.formatting import format_size, dedupe_files_by_newest
+from .terminal import clear_screen
 from ..config import UserSettings, DrivesConfig, extract_subfolders_from_manifest
 from ..sync import get_sync_status, count_purgeable_files, SyncStatus
 from ..sync.sync_state import SyncState
@@ -804,7 +805,7 @@ def show_add_custom_folder(client, auth=None) -> tuple[str | None, str | None]:
         Tuple of (folder_id, folder_name) if successful, (None, None) if cancelled
     """
     from .keyboard import input_with_esc, CancelInput, wait_with_skip
-    from ..utils import parse_drive_folder_url
+    from ..drive.utils import parse_drive_folder_url
     from .colors import Colors
 
     clear_screen()

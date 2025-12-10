@@ -4,7 +4,7 @@ Tests for utility functions.
 
 import pytest
 
-from src.utils import sanitize_filename, sanitize_path, dedupe_files_by_newest
+from src.core.formatting import sanitize_filename, sanitize_path, dedupe_files_by_newest
 
 
 class TestSanitizeFilename:

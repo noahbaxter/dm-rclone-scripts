@@ -124,3 +124,33 @@ def sort_by_name(items: List[Any], key: Optional[Callable[[Any], str]] = None) -
     if key is None:
         return sorted(items, key=name_sort_key)
     return sorted(items, key=lambda x: name_sort_key(key(x)))
+
+
+# ============================================================================
+# File deduplication
+# ============================================================================
+
+def dedupe_files_by_newest(files: list) -> list:
+    """
+    Deduplicate files with same path, keeping only newest version.
+
+    Some charters upload multiple versions with same filename - we only want the newest.
+    Uses sanitized paths as keys so paths differing only by illegal chars (like trailing
+    spaces) are treated as duplicates.
+
+    Args:
+        files: List of file dicts with "path" and "modified" keys
+
+    Returns:
+        Deduplicated list with only newest version of each path
+    """
+    by_path = {}
+    for f in files:
+        path = f.get("path", "")
+        # Use sanitized path as key - paths that differ only by illegal chars
+        # (like trailing spaces) should be treated as duplicates
+        key = sanitize_path(path)
+        modified = f.get("modified", "")
+        if key not in by_path or modified > by_path[key].get("modified", ""):
+            by_path[key] = f
+    return list(by_path.values())

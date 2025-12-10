@@ -8,7 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import List, Tuple
 
-from ..utils import format_size
+from ..core.formatting import format_size
 
 
 def format_purge_tree(files: List[Tuple[Path, int]], base_path: Path) -> List[str]:

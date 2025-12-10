@@ -7,8 +7,8 @@ from _helpers import REPO_ROOT, fetch_manifest, find_folder_in_manifest, load_se
 
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.utils import format_size
-from src.constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS
+from src.core.formatting import format_size
+from src.core.constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS
 from src.ui.screens import extract_subfolders_from_manifest
 from src.sync import count_purgeable_files
 from src.stats import get_best_stats
