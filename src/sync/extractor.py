@@ -133,3 +133,32 @@ def delete_video_files(folder_path: Path) -> int:
     Returns count of deleted files.
     """
     return delete_ignored_files(folder_path, VIDEO_EXTENSIONS)
+
+
+def scan_extracted_files(folder_path: Path, base_path: Path = None) -> dict[str, int]:
+    """
+    Scan folder and return dict of {relative_path: size} for all files.
+
+    Args:
+        folder_path: Path to scan
+        base_path: Base path for relative paths (defaults to folder_path)
+
+    Returns:
+        Dict mapping relative file paths to their sizes
+    """
+    if base_path is None:
+        base_path = folder_path
+
+    files = {}
+    if not folder_path.exists():
+        return files
+
+    for f in folder_path.rglob("*"):
+        if f.is_file() and f.name != CHECKSUM_FILE:
+            try:
+                rel_path = str(f.relative_to(base_path))
+                files[rel_path] = f.stat().st_size
+            except (ValueError, OSError):
+                pass
+
+    return files

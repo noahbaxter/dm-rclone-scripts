@@ -1,11 +1,10 @@
 """
 Filesystem cache for DM Chart Sync.
 
-Provides cached scanning of local files, checksums, and chart folders.
+Provides cached scanning of local files and chart folders.
 Cache is invalidated after downloads/purges.
 """
 
-import json
 import os
 from pathlib import Path
 
@@ -17,19 +16,16 @@ class SyncCache:
 
     def __init__(self):
         self.local_files: dict[str, dict[str, int]] = {}  # folder_path -> {rel_path: size}
-        self.checksums: dict[str, dict[str, dict]] = {}  # folder_path -> {parent: data}
         self.actual_charts: dict[str, tuple[int, int]] = {}  # folder_path -> (count, size)
 
     def clear(self):
         """Clear all cached data (call after download/purge)."""
         self.local_files.clear()
-        self.checksums.clear()
         self.actual_charts.clear()
 
     def clear_folder(self, folder_path: str):
         """Clear cached data for a specific folder."""
         self.local_files.pop(folder_path, None)
-        self.checksums.pop(folder_path, None)
         # Clear actual_charts for this folder and all subfolders
         to_remove = [k for k in self.actual_charts if k.startswith(folder_path)]
         for k in to_remove:
@@ -90,45 +86,6 @@ def scan_local_files(folder_path: Path) -> dict[str, int]:
     scan_dir(folder_path)
     _cache.local_files[cache_key] = local_files
     return local_files
-
-
-def scan_checksums(folder_path: Path) -> dict[str, dict]:
-    """
-    Scan for all check.txt files and return dict of {parent_path: checksum_data}.
-
-    Much faster than reading check.txt individually for each chart.
-    Results are cached until clear_cache() is called.
-    """
-    cache_key = str(folder_path)
-    if cache_key in _cache.checksums:
-        return _cache.checksums[cache_key]
-
-    checksums = {}
-    if not folder_path.exists():
-        return checksums
-
-    checksum_file = "check.txt"
-
-    def scan_dir(dir_path: Path, prefix: str = ""):
-        try:
-            with os.scandir(dir_path) as entries:
-                for entry in entries:
-                    if entry.is_file(follow_symlinks=False) and entry.name == checksum_file:
-                        try:
-                            with open(entry.path) as f:
-                                data = json.load(f)
-                                checksums[prefix.rstrip("/")] = data
-                        except (json.JSONDecodeError, IOError):
-                            pass
-                    elif entry.is_dir(follow_symlinks=False):
-                        rel_path = f"{prefix}{entry.name}/" if prefix else f"{entry.name}/"
-                        scan_dir(Path(entry.path), rel_path)
-        except OSError:
-            pass
-
-    scan_dir(folder_path)
-    _cache.checksums[cache_key] = checksums
-    return checksums
 
 
 def _scan_actual_charts_uncached(folder_path: Path) -> tuple[int, int]:

@@ -20,9 +20,10 @@ import aiohttp
 import certifi
 
 from ..constants import VIDEO_EXTENSIONS
-from .extractor import extract_archive, get_folder_size, delete_video_files
-from .checksum import write_checksum
+from ..paths import get_extract_tmp_dir
+from .extractor import extract_archive, get_folder_size, delete_video_files, scan_extracted_files
 from .download_planner import DownloadTask
+from .sync_state import SyncState
 from ..ui.progress_display import FolderProgress
 
 # Large file threshold for reducing download concurrency (500MB)
@@ -301,15 +302,28 @@ class FileDownloader:
             bytes_downloaded=downloaded_bytes,
         )
 
-    def process_archive(self, task: DownloadTask) -> Tuple[bool, str]:
-        """Process a downloaded archive: extract, write checksum, delete videos, cleanup."""
+    def process_archive(self, task: DownloadTask, sync_state=None, archive_rel_path: str = None) -> Tuple[bool, str, dict]:
+        """
+        Process a downloaded archive: extract to temp, move contents to destination, update sync state.
+
+        Args:
+            task: Download task with archive info
+            sync_state: SyncState instance to update (optional for backward compat)
+            archive_rel_path: Relative path of archive in manifest (e.g., "Guitar Hero/(2005) Guitar Hero/Guitar Hero.7z")
+
+        Returns:
+            Tuple of (success, error_message, extracted_files_dict)
+        """
+        import shutil
+
         archive_path = task.local_path
         chart_folder = archive_path.parent
 
         archive_name = archive_path.name.replace("_download_", "", 1)
         archive_stem = Path(archive_name).stem
-        extracted_folder = chart_folder / archive_stem
+        archive_size = task.size
 
+        # Rename from _download_ prefix if needed
         if archive_path.name.startswith("_download_"):
             clean_archive_path = chart_folder / archive_name
             try:
@@ -318,46 +332,61 @@ class FileDownloader:
             except OSError:
                 pass
 
-        archive_size = task.size
-        size_before = get_folder_size(chart_folder)
-
-        success, error = extract_archive(archive_path, chart_folder)
-        if not success:
-            return False, f"Extract failed: {error}"
-
-        if extracted_folder.exists() and extracted_folder.is_dir():
-            extracted_size = get_folder_size(extracted_folder)
-        else:
-            size_after_extract = get_folder_size(chart_folder)
-            extracted_size = size_after_extract - size_before
-
-        size_novideo = None
-        if self.delete_videos:
-            video_folder = extracted_folder if extracted_folder.exists() else chart_folder
-            deleted_count = delete_video_files(video_folder)
-
-            if deleted_count > 0:
-                if extracted_folder.exists() and extracted_folder.is_dir():
-                    size_novideo = get_folder_size(extracted_folder)
-                else:
-                    size_after_videos = get_folder_size(chart_folder)
-                    size_novideo = size_after_videos - size_before
-
-        write_checksum(
-            chart_folder,
-            task.md5,
-            archive_name,
-            archive_size=archive_size,
-            extracted_size=extracted_size,
-            size_novideo=size_novideo
-        )
+        # Create unique temp folder for extraction
+        extract_tmp = get_extract_tmp_dir() / f"{archive_stem}_{id(task)}"
+        extract_tmp.mkdir(parents=True, exist_ok=True)
 
         try:
-            archive_path.unlink()
-        except Exception:
-            pass
+            # Step 1: Extract to temp folder
+            success, error = extract_archive(archive_path, extract_tmp)
+            if not success:
+                shutil.rmtree(extract_tmp, ignore_errors=True)
+                return False, f"Extract failed: {error}", {}
 
-        return True, ""
+            # Step 2: Delete videos if enabled
+            if self.delete_videos:
+                delete_video_files(extract_tmp)
+
+            # Step 3: Scan extracted files (relative to temp folder)
+            extracted_files = scan_extracted_files(extract_tmp, extract_tmp)
+
+            # Step 4: Move extracted contents to chart_folder
+            # Move each top-level item from temp to chart_folder
+            for item in extract_tmp.iterdir():
+                dest = chart_folder / item.name
+                # Remove existing destination if it exists
+                if dest.exists():
+                    if dest.is_dir():
+                        shutil.rmtree(dest)
+                    else:
+                        dest.unlink()
+                shutil.move(str(item), str(dest))
+
+            # Clean up empty temp folder
+            shutil.rmtree(extract_tmp, ignore_errors=True)
+
+            # Step 5: Update sync state if provided
+            if sync_state and archive_rel_path:
+                sync_state.add_archive(
+                    path=archive_rel_path,
+                    md5=task.md5,
+                    archive_size=archive_size,
+                    files=extracted_files
+                )
+                sync_state.save()
+
+            # Step 6: Delete the archive file
+            try:
+                archive_path.unlink()
+            except Exception:
+                pass
+
+            return True, "", extracted_files
+
+        except Exception as e:
+            # Cleanup on error
+            shutil.rmtree(extract_tmp, ignore_errors=True)
+            return False, str(e), {}
 
     def _cleanup_partial_downloads(self, tasks: List[DownloadTask]) -> int:
         """Clean up partial downloads after cancellation."""
@@ -382,6 +411,7 @@ class FileDownloader:
         tasks: List[DownloadTask],
         progress: Optional[FolderProgress],
         progress_callback: Optional[Callable[[DownloadResult], None]],
+        sync_state: Optional[SyncState] = None,
     ) -> Tuple[int, int, List[DownloadTask], int, bool]:
         """Internal async implementation of download_many."""
         downloaded = 0
@@ -402,7 +432,8 @@ class FileDownloader:
 
         def process_archive_limited(task: DownloadTask) -> Tuple[bool, str]:
             with extract_semaphore:
-                return self.process_archive(task)
+                success, error, _ = self.process_archive(task, sync_state, task.rel_path)
+                return success, error
 
         ssl_context = ssl.create_default_context(cafile=get_certifi_path())
 
@@ -469,6 +500,12 @@ class FileDownloader:
                                     progress.archive_completed(task.local_path, archive_name)
 
                             downloaded += 1
+
+                            # Track direct files in sync state
+                            if not task.is_archive and sync_state and task.rel_path:
+                                sync_state.add_file(task.rel_path, task.size, task.md5)
+                                sync_state.save()
+
                             if progress:
                                 if not task.is_archive:
                                     completed_info = progress.file_completed(result.file_path)
@@ -502,6 +539,7 @@ class FileDownloader:
         tasks: List[DownloadTask],
         progress_callback: Optional[Callable[[DownloadResult], None]] = None,
         show_progress: bool = True,
+        sync_state: Optional[SyncState] = None,
     ) -> Tuple[int, int, int, int, bool]:
         """Download multiple files concurrently using asyncio."""
         if not tasks:
@@ -536,7 +574,7 @@ class FileDownloader:
         auth_failures = 0
         try:
             downloaded, errors, retryable, auth_failures, cancelled = asyncio.run(
-                self._download_many_async(tasks, progress, progress_callback)
+                self._download_many_async(tasks, progress, progress_callback, sync_state)
             )
             rate_limited = len(retryable)
             permanent_errors = errors - rate_limited

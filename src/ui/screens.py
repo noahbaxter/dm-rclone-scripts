@@ -11,6 +11,7 @@ from pathlib import Path
 from ..utils import format_size, clear_screen, dedupe_files_by_newest
 from ..config import UserSettings, DrivesConfig, extract_subfolders_from_manifest
 from ..sync import get_sync_status, count_purgeable_files, SyncStatus
+from ..sync.sync_state import SyncState
 from ..stats import get_best_stats, get_scanner, get_overrides
 from .menu import Menu, MenuItem, MenuDivider, MenuGroupHeader, MenuResult, print_header
 from .colors import Colors
@@ -157,7 +158,8 @@ def compute_main_menu_cache(
     folders: list,
     user_settings: UserSettings,
     download_path: Path,
-    drives_config: DrivesConfig
+    drives_config: DrivesConfig,
+    sync_state: SyncState = None
 ) -> MainMenuCache:
     """
     Compute all expensive stats for the main menu.
@@ -194,10 +196,10 @@ def compute_main_menu_cache(
         folder_start = time.time()
 
         # Get sync status for this folder (enabled only)
-        status = get_sync_status([folder], download_path, user_settings)
+        status = get_sync_status([folder], download_path, user_settings, sync_state)
 
         # Get excess/purgeable count for this folder
-        folder_purge_count, folder_purge_size = count_purgeable_files([folder], download_path, user_settings)
+        folder_purge_count, folder_purge_size = count_purgeable_files([folder], download_path, user_settings, sync_state)
 
         folder_time = time.time() - folder_start
         if folder_time > 1.0:  # Only log if > 1 second
@@ -269,7 +271,8 @@ def show_main_menu(
     download_path: Path = None,
     drives_config: DrivesConfig = None,
     cache: MainMenuCache = None,
-    auth=None
+    auth=None,
+    sync_state: SyncState = None
 ) -> tuple[str, str | int | None, int]:
     """
     Show main menu and get user selection.
@@ -295,7 +298,7 @@ def show_main_menu(
     """
     # Compute cache if not provided
     if cache is None:
-        cache = compute_main_menu_cache(folders, user_settings, download_path, drives_config)
+        cache = compute_main_menu_cache(folders, user_settings, download_path, drives_config, sync_state)
 
     # Build footer with color legend
     legend = f"{Colors.RESET}White{Colors.MUTED} = synced   {Colors.RED}Red{Colors.MUTED} = purgeable"
@@ -381,11 +384,7 @@ def show_main_menu(
     menu.add_item(MenuDivider())
 
     # Action items
-    menu.add_item(MenuItem("Download", hotkey="D", value=("download", None)))
-
-    # Show purge count from cache
-    menu.add_item(MenuItem("Purge", hotkey="X", value=("purge", None), description=cache.purge_desc))
-    menu.add_item(MenuItem("Repair Checksums", hotkey="R", value=("repair", None), description="Fix missing size data in check.txt files"))
+    menu.add_item(MenuItem("Sync", hotkey="S", value=("sync", None), description="Download missing, purge extras"))
 
     # Custom folders option
     menu.add_item(MenuDivider())
@@ -490,7 +489,7 @@ def _compute_setlist_stats_from_files(folder: dict, dedupe: bool = True) -> dict
     return stats
 
 
-def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_path: Path = None) -> str | bool:
+def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_path: Path = None, sync_state: SyncState = None) -> str | bool:
     """
     Show toggle menu for setlists within a drive.
 
@@ -589,7 +588,7 @@ def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_
         if not drive_enabled:
             # Drive is disabled - check for purgeable content
             if download_path:
-                excess_charts, excess_size = count_purgeable_files([folder], download_path, user_settings)
+                excess_charts, excess_size = count_purgeable_files([folder], download_path, user_settings, sync_state)
                 if excess_charts > 0:
                     subtitle = f"DRIVE DISABLED - {Colors.RED}Purgeable: {excess_charts} files ({format_size(excess_size)}){Colors.RESET}"
                 else:
@@ -597,8 +596,8 @@ def show_subfolder_settings(folder: dict, user_settings: UserSettings, download_
             else:
                 subtitle = "DRIVE DISABLED"
         elif download_path:
-            status = get_sync_status([folder], download_path, user_settings)
-            excess_charts, excess_size = count_purgeable_files([folder], download_path, user_settings)
+            status = get_sync_status([folder], download_path, user_settings, sync_state)
+            excess_charts, excess_size = count_purgeable_files([folder], download_path, user_settings, sync_state)
 
             if status.total_charts > 0 or excess_charts > 0:
                 # Use "archives" for custom folders before extraction, "charts" after

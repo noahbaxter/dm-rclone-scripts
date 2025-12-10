@@ -12,7 +12,8 @@ from pathlib import Path
 from ..constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS
 from ..stats import get_best_stats
 from ..utils import sanitize_path, dedupe_files_by_newest
-from .cache import scan_local_files, scan_checksums, scan_actual_charts
+from .cache import scan_local_files, scan_actual_charts
+from .sync_state import SyncState
 
 
 @dataclass
@@ -44,42 +45,49 @@ def is_archive_file(filename: str) -> bool:
     return any(filename.lower().endswith(ext) for ext in CHART_ARCHIVE_EXTENSIONS)
 
 
-def _check_archive_synced(checksums: dict, checksum_path: str, archive_name: str, manifest_md5: str) -> tuple[bool, int]:
+def _check_archive_synced(
+    sync_state: SyncState,
+    folder_name: str,
+    checksum_path: str,
+    archive_name: str,
+    manifest_md5: str,
+) -> tuple[bool, int]:
     """
-    Check if an archive is synced by comparing checksum data.
+    Check if an archive is synced using sync_state.
 
     Args:
-        checksums: Dict from scan_checksums()
-        checksum_path: Path key in checksums dict
-        archive_name: Name of archive file to check
+        sync_state: SyncState instance (can be None)
+        folder_name: Folder name (e.g., "Guitar Hero")
+        checksum_path: Parent path within folder (e.g., "(2005) Guitar Hero")
+        archive_name: Archive filename (e.g., "Guitar Hero.7z")
         manifest_md5: Expected MD5 from manifest
 
     Returns:
         Tuple of (is_synced, extracted_size)
     """
-    checksum_data = checksums.get(checksum_path, {})
-    stored_md5 = None
-    extracted_size = 0
-    has_entry = False
+    if not sync_state:
+        return False, 0
 
-    # New multi-archive format
-    if "archives" in checksum_data:
-        archive_info = checksum_data["archives"].get(archive_name, {})
-        if archive_info:
-            has_entry = True
-            stored_md5 = archive_info.get("md5", "")
-            extracted_size = archive_info.get("size", 0)
-    # Old single-archive format
-    elif "md5" in checksum_data:
-        has_entry = True
-        stored_md5 = checksum_data.get("md5", "")
-        extracted_size = checksum_data.get("size", 0)
+    # Build full archive path: folder_name/checksum_path/archive_name
+    if checksum_path:
+        archive_path = f"{folder_name}/{checksum_path}/{archive_name}"
+    else:
+        archive_path = f"{folder_name}/{archive_name}"
 
-    is_synced = has_entry and stored_md5 == manifest_md5
-    return is_synced, extracted_size
+    if sync_state.is_archive_synced(archive_path, manifest_md5):
+        # Verify extracted files still exist on disk
+        archive_files = sync_state.get_archive_files(archive_path)
+        missing = sync_state.check_files_exist(archive_files)
+        if len(missing) == 0:
+            # Get size from archive node
+            archive = sync_state.get_archive(archive_path)
+            extracted_size = archive.get("archive_size", 0) if archive else 0
+            return True, extracted_size
+
+    return False, 0
 
 
-def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncStatus:
+def get_sync_status(folders: list, base_path: Path, user_settings=None, sync_state: SyncState = None) -> SyncStatus:
     """
     Calculate sync status for enabled folders (counts charts, not files).
 
@@ -87,6 +95,7 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
         folders: List of folder dicts from manifest
         base_path: Base download path
         user_settings: UserSettings for checking enabled states
+        sync_state: SyncState for checking synced archives (optional, falls back to check.txt)
 
     Returns:
         SyncStatus with chart totals and synced counts
@@ -199,9 +208,8 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
                 if file_name in CHART_MARKERS:
                     chart_folders[parent]["is_chart"] = True
 
-        # Batch scan: get all local files and checksums upfront
+        # Batch scan: get all local files upfront
         local_files = scan_local_files(folder_path)
-        checksums = scan_checksums(folder_path)
 
         # For custom folders, track manifest sizes per setlist so we can replace with disk sizes
         setlist_manifest_sizes = {}  # setlist_name -> manifest size
@@ -227,10 +235,10 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
             if synced_from_scan is not None:
                 continue
 
-            # For archive charts, check if check.txt has matching MD5
+            # For archive charts, check sync_state
             if data["archive_name"]:
                 is_synced, extracted_size = _check_archive_synced(
-                    checksums, data["checksum_path"], data["archive_name"], data["archive_md5"]
+                    sync_state, folder_name, data["checksum_path"], data["archive_name"], data["archive_md5"]
                 )
                 if is_synced:
                     status.synced_charts += 1
@@ -307,7 +315,7 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None) -> SyncS
                     continue
                 if data["archive_name"]:
                     is_synced, _ = _check_archive_synced(
-                        checksums, data["checksum_path"], data["archive_name"], data["archive_md5"]
+                        sync_state, folder_name, data["checksum_path"], data["archive_name"], data["archive_md5"]
                     )
                     if is_synced:
                         folder_synced_charts += 1

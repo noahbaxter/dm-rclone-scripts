@@ -6,11 +6,11 @@ Determines what files should be deleted (disabled drives, extra files, videos, p
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
-from ..constants import VIDEO_EXTENSIONS, CHART_ARCHIVE_EXTENSIONS
-from ..utils import sanitize_path
-from .cache import scan_local_files, scan_checksums
+from ..constants import VIDEO_EXTENSIONS
+from .cache import scan_local_files
+from .sync_state import SyncState
 
 
 @dataclass
@@ -36,33 +36,6 @@ class PurgeStats:
     @property
     def total_size(self) -> int:
         return self.chart_size + self.extra_file_size + self.partial_size + self.video_size
-
-
-def is_archive_file(filename: str) -> bool:
-    """Check if a filename is an archive type we handle."""
-    return any(filename.lower().endswith(ext) for ext in CHART_ARCHIVE_EXTENSIONS)
-
-
-def _check_archive_synced(checksums: dict, checksum_path: str, archive_name: str, manifest_md5: str) -> tuple[bool, int]:
-    """Check if an archive is synced by comparing checksum data."""
-    checksum_data = checksums.get(checksum_path, {})
-    stored_md5 = None
-    extracted_size = 0
-    has_entry = False
-
-    if "archives" in checksum_data:
-        archive_info = checksum_data["archives"].get(archive_name, {})
-        if archive_info:
-            has_entry = True
-            stored_md5 = archive_info.get("md5", "")
-            extracted_size = archive_info.get("size", 0)
-    elif "md5" in checksum_data:
-        has_entry = True
-        stored_md5 = checksum_data.get("md5", "")
-        extracted_size = checksum_data.get("size", 0)
-
-    is_synced = has_entry and stored_md5 == manifest_md5
-    return is_synced, extracted_size
 
 
 def find_partial_downloads(base_path: Path) -> List[Tuple[Path, int]]:
@@ -91,90 +64,57 @@ def find_partial_downloads(base_path: Path) -> List[Tuple[Path, int]]:
     return partial_files
 
 
-def find_extra_files(folder: dict, base_path: Path, local_files: dict = None) -> List[Tuple[Path, int]]:
+def find_extra_files_sync_state(
+    folder_name: str,
+    folder_path: Path,
+    sync_state: SyncState,
+    local_files: dict = None,
+) -> List[Tuple[Path, int]]:
     """
-    Find local files not in the manifest.
+    Find local files not tracked in sync_state.
 
-    For archive charts, if check.txt exists with matching MD5, the entire
-    chart folder is considered valid (extracted contents are expected).
+    This is the new simpler approach - anything on disk not in sync_state is extra.
 
     Args:
-        folder: Folder dict from manifest
-        base_path: Base download path
-        local_files: Optional pre-scanned local files dict from scan_local_files().
-                     If not provided, will scan (but prefer passing cached data).
+        folder_name: Name of the folder (for building sync state paths)
+        folder_path: Path to the folder on disk
+        sync_state: SyncState instance with tracked files
+        local_files: Optional pre-scanned local files dict
 
-    Returns list of (Path, size) tuples.
+    Returns:
+        List of (Path, size) tuples for extra files
     """
-    manifest_files = folder.get("files")
-    if not manifest_files:
-        return []
-
-    folder_path = base_path / folder["name"]
-
-    # Use cached local_files if provided, otherwise scan
     if local_files is None:
         local_files = scan_local_files(folder_path)
     if not local_files:
         return []
 
-    # CRITICAL: Use sanitized paths to match actual filenames on disk
-    # Downloads use sanitize_path() which replaces illegal chars (: ? * etc.)
-    expected_paths = {sanitize_path(f["path"]) for f in manifest_files}
+    # Get all tracked files from sync_state
+    tracked_files = sync_state.get_all_files()
 
-    # Build a set of chart folders that have valid check.txt (synced archive charts)
-    # These folders should be entirely skipped during purge
-    valid_archive_prefixes = set()
-    checksums = scan_checksums(folder_path)
-
-    for f in manifest_files:
-        file_path = f.get("path", "")
-        file_name = file_path.split("/")[-1].lower() if "/" in file_path else file_path.lower()
-        file_md5 = f.get("md5", "")
-
-        if is_archive_file(file_name) and file_md5:
-            # This is an archive file - check if it's been extracted
-            sanitized = sanitize_path(file_path)
-            if "/" in file_path:
-                parent = "/".join(sanitized.split("/")[:-1])
-            else:
-                # Root-level archive - check.txt is in folder root
-                parent = ""
-            # Get original archive name (not lowercased) for check.txt lookup
-            archive_name = sanitized.split("/")[-1] if "/" in sanitized else sanitized
-            # Use cached checksums instead of reading each file
-            is_synced, _ = _check_archive_synced(checksums, parent, archive_name, file_md5)
-            if is_synced:
-                # This archive has been extracted - mark folder prefix as valid
-                valid_archive_prefixes.add(parent + "/" if parent else "")
-
-    # Find extra files using cached local_files dict
-    filtered_extras = []
+    # Find extras - files on disk not in sync_state
+    extras = []
     for rel_path, size in local_files.items():
-        # Skip if in expected paths
-        if rel_path in expected_paths:
-            continue
+        # Build the full sync_state path (folder_name/rel_path)
+        state_path = f"{folder_name}/{rel_path}"
+        if state_path not in tracked_files:
+            extras.append((folder_path / rel_path, size))
 
-        # Check if this file is inside a valid archive folder
-        is_in_valid_archive = False
-        for valid_prefix in valid_archive_prefixes:
-            if valid_prefix and rel_path.startswith(valid_prefix):
-                is_in_valid_archive = True
-                break
-
-        if not is_in_valid_archive:
-            filtered_extras.append((folder_path / rel_path, size))
-
-    return filtered_extras
+    return extras
 
 
-def plan_purge(folders: list, base_path: Path, user_settings=None) -> Tuple[List[Tuple[Path, int]], PurgeStats]:
+def plan_purge(
+    folders: list,
+    base_path: Path,
+    user_settings=None,
+    sync_state: Optional[SyncState] = None,
+) -> Tuple[List[Tuple[Path, int]], PurgeStats]:
     """
     Plan what files should be purged.
 
     This identifies:
     - Files from disabled drives/setlists
-    - Extra files not in manifest
+    - Extra files not in manifest (or not in sync_state if provided)
     - Partial downloads
     - Video files (when delete_videos is enabled)
 
@@ -182,6 +122,7 @@ def plan_purge(folders: list, base_path: Path, user_settings=None) -> Tuple[List
         folders: List of folder dicts from manifest
         base_path: Base download path
         user_settings: UserSettings instance for checking enabled states
+        sync_state: SyncState instance for checking tracked files (optional)
 
     Returns:
         Tuple of (files_to_purge, stats)
@@ -236,8 +177,12 @@ def plan_purge(folders: list, base_path: Path, user_settings=None) -> Tuple[List
                 stats.chart_size += size
                 all_files.append((folder_path / rel_path, size))
 
-        # Extra files not in manifest
-        extras = find_extra_files(folder, base_path, local_files)
+        # Extra files not tracked in sync_state
+        if sync_state:
+            extras = find_extra_files_sync_state(folder_name, folder_path, sync_state, local_files)
+        else:
+            extras = []  # No sync_state = can't determine extras
+
         extra_paths = set()
         for f, size in extras:
             rel_path = str(f.relative_to(folder_path))
@@ -269,23 +214,33 @@ def plan_purge(folders: list, base_path: Path, user_settings=None) -> Tuple[List
     return unique_files, stats
 
 
-def count_purgeable_files(folders: list, base_path: Path, user_settings=None) -> Tuple[int, int]:
+def count_purgeable_files(
+    folders: list,
+    base_path: Path,
+    user_settings=None,
+    sync_state: Optional[SyncState] = None,
+) -> Tuple[int, int]:
     """
     Count files that would be purged (backward-compatible wrapper).
 
     Returns:
         Tuple of (total_files, total_size_bytes)
     """
-    _, stats = plan_purge(folders, base_path, user_settings)
+    _, stats = plan_purge(folders, base_path, user_settings, sync_state)
     return stats.total_files, stats.total_size
 
 
-def count_purgeable_detailed(folders: list, base_path: Path, user_settings=None) -> PurgeStats:
+def count_purgeable_detailed(
+    folders: list,
+    base_path: Path,
+    user_settings=None,
+    sync_state: Optional[SyncState] = None,
+) -> PurgeStats:
     """
     Count files that would be purged with detailed breakdown.
 
     Returns:
         PurgeStats with breakdown of charts vs extra files
     """
-    _, stats = plan_purge(folders, base_path, user_settings)
+    _, stats = plan_purge(folders, base_path, user_settings, sync_state)
     return stats

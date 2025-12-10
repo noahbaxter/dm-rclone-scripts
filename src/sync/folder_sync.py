@@ -12,10 +12,10 @@ from ..drive import DriveClient, FolderScanner
 from ..utils import format_size, format_duration, print_progress, print_long_path_warning, dedupe_files_by_newest
 from ..ui.keyboard import wait_with_skip
 from .cache import clear_cache, clear_folder_cache
-from .checksum import repair_checksum_sizes
 from .download_planner import plan_downloads
 from .purge_planner import plan_purge, find_partial_downloads
 from .purger import delete_files
+from .sync_state import SyncState
 
 
 class FolderSync:
@@ -25,11 +25,13 @@ class FolderSync:
         self,
         client: DriveClient,
         auth_token: Optional[Union[str, Callable[[], Optional[str]]]] = None,
-        delete_videos: bool = True
+        delete_videos: bool = True,
+        sync_state: Optional[SyncState] = None,
     ):
         self.client = client
         self.auth_token = auth_token
         self.delete_videos = delete_videos
+        self.sync_state = sync_state
         # Import here to avoid circular dependency
         from .downloader import FileDownloader
         self.downloader = FileDownloader(auth_token=auth_token, delete_videos=delete_videos)
@@ -78,7 +80,10 @@ class FolderSync:
             manifest_files = deduped_files
 
             print(f"  Using manifest ({len(manifest_files)} files)...")
-            tasks, skipped, long_paths = plan_downloads(manifest_files, folder_path, self.delete_videos)
+            tasks, skipped, long_paths = plan_downloads(
+                manifest_files, folder_path, self.delete_videos,
+                sync_state=self.sync_state, folder_name=folder["name"]
+            )
             scan_time = time.time() - scan_start
             print(f"  Comparison completed in {format_duration(scan_time)} (0 API calls)")
 
@@ -123,7 +128,9 @@ class FolderSync:
 
         # Download
         download_start = time.time()
-        downloaded, _, errors, rate_limited, cancelled = self.downloader.download_many(tasks)
+        downloaded, _, errors, rate_limited, cancelled = self.downloader.download_many(
+            tasks, sync_state=self.sync_state
+        )
         download_time = time.time() - download_start
 
         if not cancelled:
@@ -242,7 +249,12 @@ class FolderSync:
         wait_with_skip(2)
 
 
-def purge_all_folders(folders: list, base_path: Path, user_settings=None):
+def purge_all_folders(
+    folders: list,
+    base_path: Path,
+    user_settings=None,
+    sync_state: Optional[SyncState] = None,
+):
     """
     Purge files that shouldn't be synced.
 
@@ -257,6 +269,7 @@ def purge_all_folders(folders: list, base_path: Path, user_settings=None):
         folders: List of folder dicts from manifest
         base_path: Base download path
         user_settings: UserSettings instance for checking enabled states
+        sync_state: SyncState instance for checking tracked files (optional)
     """
     from ..ui.purge_display import format_purge_tree
 
@@ -295,7 +308,7 @@ def purge_all_folders(folders: list, base_path: Path, user_settings=None):
             continue
 
         # Drive is enabled - use plan_purge to get files
-        files_to_purge, _ = plan_purge([folder], base_path, user_settings)
+        files_to_purge, _ = plan_purge([folder], base_path, user_settings, sync_state)
 
         if not files_to_purge:
             continue
@@ -341,50 +354,3 @@ def purge_all_folders(folders: list, base_path: Path, user_settings=None):
     wait_with_skip(2)
 
 
-def repair_all_checksums(folders: list, base_path: Path) -> tuple[int, int]:
-    """
-    Repair check.txt files for all folders.
-
-    Fixes missing/incorrect size data and renames _download_ prefixed folders.
-
-    Args:
-        folders: List of folder dicts from manifest
-        base_path: Base download path
-
-    Returns:
-        Tuple of (total_repaired, total_checked)
-    """
-    total_repaired = 0
-    total_checked = 0
-
-    print("Repairing checksum data...")
-    print("=" * 50)
-
-    for folder in folders:
-        folder_name = folder.get("name", "")
-        folder_path = base_path / folder_name
-
-        if not folder_path.exists():
-            continue
-
-        print(f"\n[{folder_name}]")
-        repaired, checked = repair_checksum_sizes(folder_path)
-        total_repaired += repaired
-        total_checked += checked
-
-        if repaired > 0:
-            print(f"  Repaired {repaired}/{checked} check.txt files")
-        else:
-            print(f"  Checked {checked} files (all OK)")
-
-    print()
-    print("=" * 50)
-    print(f"Total: Repaired {total_repaired}/{total_checked} check.txt files")
-
-    # Clear cache so stats are recalculated
-    clear_cache()
-
-    # Auto-dismiss after 2 seconds (any key skips)
-    wait_with_skip(2)
-
-    return total_repaired, total_checked
