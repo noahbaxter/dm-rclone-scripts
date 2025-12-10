@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from src.sync.sync_state import SyncState
-from src.sync.sync_status import get_sync_status
+from src.sync.state import SyncState
+from src.sync.status import get_sync_status
 from src.sync.purge_planner import find_extra_files_sync_state
 
 

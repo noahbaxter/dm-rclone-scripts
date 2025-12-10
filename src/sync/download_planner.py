@@ -12,7 +12,7 @@ from typing import List, Tuple, Optional
 from ..core.constants import CHART_ARCHIVE_EXTENSIONS, VIDEO_EXTENSIONS
 from ..core.files import file_exists_with_size
 from ..core.formatting import sanitize_path
-from .sync_state import SyncState
+from .state import SyncState
 
 # Windows MAX_PATH limit (260 chars including null terminator)
 WINDOWS_MAX_PATH = 260

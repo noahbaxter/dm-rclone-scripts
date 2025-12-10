@@ -12,7 +12,7 @@ from ..core.formatting import format_size, dedupe_files_by_newest
 from .terminal import clear_screen
 from ..config import UserSettings, DrivesConfig, extract_subfolders_from_manifest
 from ..sync import get_sync_status, count_purgeable_files, SyncStatus
-from ..sync.sync_state import SyncState
+from ..sync.state import SyncState
 from ..stats import get_best_stats, get_scanner, get_overrides
 from .menu import Menu, MenuItem, MenuDivider, MenuGroupHeader, MenuResult, print_header
 from .colors import Colors

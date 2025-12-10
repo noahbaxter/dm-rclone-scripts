@@ -16,7 +16,7 @@ from .cache import clear_cache, clear_folder_cache
 from .download_planner import plan_downloads
 from .purge_planner import plan_purge, find_partial_downloads
 from .purger import delete_files
-from .sync_state import SyncState
+from .state import SyncState
 
 
 class FolderSync:
@@ -272,7 +272,7 @@ def purge_all_folders(
         user_settings: UserSettings instance for checking enabled states
         sync_state: SyncState instance for checking tracked files (optional)
     """
-    from ..ui.purge_display import format_purge_tree
+    from ..ui.purge import format_purge_tree
 
     print()
     print("=" * 50)

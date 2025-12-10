@@ -23,8 +23,8 @@ from ..core.constants import VIDEO_EXTENSIONS
 from ..core.paths import get_extract_tmp_dir
 from .extractor import extract_archive, get_folder_size, delete_video_files, scan_extracted_files
 from .download_planner import DownloadTask
-from .sync_state import SyncState
-from ..ui.progress_display import FolderProgress
+from .state import SyncState
+from ..ui.progress import FolderProgress
 
 # Large file threshold for reducing download concurrency (500MB)
 LARGE_FILE_THRESHOLD = 500_000_000

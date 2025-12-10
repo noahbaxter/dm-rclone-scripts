@@ -13,7 +13,7 @@ from ..core.constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS
 from ..core.formatting import sanitize_path, dedupe_files_by_newest
 from ..stats import get_best_stats
 from .cache import scan_local_files, scan_actual_charts
-from .sync_state import SyncState
+from .state import SyncState
 
 
 @dataclass

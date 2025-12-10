@@ -13,7 +13,7 @@ import pytest
 
 from src.sync import count_purgeable_files, clear_cache
 from src.sync.cache import scan_local_files
-from src.sync.sync_state import SyncState
+from src.sync.state import SyncState
 
 # Backwards compat
 _scan_local_files = scan_local_files

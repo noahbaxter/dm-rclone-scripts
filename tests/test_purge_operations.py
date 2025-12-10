@@ -17,7 +17,7 @@ from src.sync import (
     clear_cache,
 )
 from src.sync.purge_planner import find_extra_files_sync_state
-from src.sync.sync_state import SyncState
+from src.sync.state import SyncState
 
 # Backwards compat alias
 clear_scan_cache = clear_cache

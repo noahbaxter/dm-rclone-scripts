@@ -10,7 +10,7 @@ from typing import List, Tuple, Optional
 
 from ..core.constants import VIDEO_EXTENSIONS
 from .cache import scan_local_files
-from .sync_state import SyncState
+from .state import SyncState
 
 
 @dataclass

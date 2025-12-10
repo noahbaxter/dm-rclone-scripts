@@ -6,13 +6,13 @@ Handles file downloading, sync logic, and progress tracking.
 
 from .progress import ProgressTracker
 from .cache import clear_cache, clear_folder_cache
-from .sync_status import SyncStatus, get_sync_status
+from .status import SyncStatus, get_sync_status
 from .download_planner import DownloadTask, plan_downloads
 from .purge_planner import PurgeStats, count_purgeable_files, count_purgeable_detailed
 from .purger import delete_files
 from .folder_sync import FolderSync, purge_all_folders
 from .downloader import FileDownloader, DownloadResult
-from .sync_state import SyncState
+from .state import SyncState
 
 # Backwards compatibility aliases
 clear_scan_cache = clear_cache
