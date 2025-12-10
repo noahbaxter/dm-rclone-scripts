@@ -13,30 +13,13 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from src import (
-    DriveClient,
-    Manifest,
-    FolderSync,
-    AuthManager,
-    purge_all_folders,
-    clear_screen,
-    set_terminal_size,
-    print_header,
-    show_main_menu,
-    show_subfolder_settings,
-    show_confirmation,
-    show_oauth_prompt,
-    show_add_custom_folder,
-    UserSettings,
-    DrivesConfig,
-    CustomFolders,
-    Colors,
-    extract_subfolders_from_manifest,
-    compute_main_menu_cache,
-    format_size,
-    TeeOutput,
-    fetch_manifest,
-    # Paths
+from src.drive import DriveClient, AuthManager
+from src.manifest import Manifest, fetch_manifest
+from src.sync import FolderSync, purge_all_folders
+from src.sync.state import SyncState
+from src.config import UserSettings, DrivesConfig, CustomFolders, extract_subfolders_from_manifest
+from src.core.formatting import format_size
+from src.core.paths import (
     get_data_dir,
     get_settings_path,
     get_token_path,
@@ -46,7 +29,18 @@ from src import (
     migrate_legacy_files,
     cleanup_tmp_dir,
 )
-from src.sync.sync_state import SyncState
+from src.ui import (
+    print_header,
+    show_main_menu,
+    show_subfolder_settings,
+    show_confirmation,
+    show_oauth_prompt,
+    show_add_custom_folder,
+    Colors,
+    compute_main_menu_cache,
+)
+from src.ui.terminal import clear_screen, set_terminal_size
+from src.ui.logging import TeeOutput
 from src.ui.keyboard import wait_with_skip
 from src.sync import count_purgeable_detailed, clear_scan_cache
 from src.drive.client import DriveClientConfig
