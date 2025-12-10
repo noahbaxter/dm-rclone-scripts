@@ -20,6 +20,7 @@ from .paths import (
     get_download_path,
     get_drives_config_path,
     migrate_legacy_files,
+    cleanup_tmp_dir,
 )
 
 # Drive module
@@ -60,6 +61,7 @@ __all__ = [
     "get_download_path",
     "get_drives_config_path",
     "migrate_legacy_files",
+    "cleanup_tmp_dir",
     # Drive
     "DriveClient",
     "FolderScanner",

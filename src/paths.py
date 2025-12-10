@@ -92,6 +92,36 @@ def get_drives_config_path() -> Path:
     return get_bundle_dir() / "drives.json"
 
 
+def get_sync_state_path() -> Path:
+    """Get path to sync state file."""
+    return get_data_dir() / "sync_state.json"
+
+
+def get_tmp_dir() -> Path:
+    """Get temp directory for downloads and extraction staging."""
+    tmp_dir = get_data_dir() / "tmp"
+    tmp_dir.mkdir(exist_ok=True)
+    return tmp_dir
+
+
+def get_extract_tmp_dir() -> Path:
+    """Get temp directory for extraction staging."""
+    extract_dir = get_tmp_dir() / "extract"
+    extract_dir.mkdir(exist_ok=True)
+    return extract_dir
+
+
+def cleanup_tmp_dir():
+    """Clean up temp directory (call on startup)."""
+    import shutil
+    tmp_dir = get_data_dir() / "tmp"
+    if tmp_dir.exists():
+        try:
+            shutil.rmtree(tmp_dir)
+        except Exception:
+            pass
+
+
 # Legacy paths (for migration)
 def _get_legacy_settings_path() -> Path:
     """Old location: user_settings.json at app root."""
