@@ -27,7 +27,7 @@ from src.drive.client import DriveClientConfig
 from src.manifest import Manifest, FolderEntry, count_charts_in_files
 from src.config import DrivesConfig
 from src.core.formatting import format_size, format_duration
-from src.ui.terminal import print_progress
+from src.ui.primitives import print_progress
 
 # ============================================================================
 # Configuration

@@ -44,6 +44,8 @@ from .formatting import (
     sort_by_name,
 )
 
+from .progress import ProgressTracker
+
 __all__ = [
     # Constants
     "CHART_MARKERS",
@@ -77,4 +79,6 @@ __all__ = [
     "sanitize_path",
     "name_sort_key",
     "sort_by_name",
+    # Progress
+    "ProgressTracker",
 ]

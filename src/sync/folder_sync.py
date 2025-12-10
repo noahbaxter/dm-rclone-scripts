@@ -10,8 +10,7 @@ from typing import Callable, Optional, Union
 
 from ..drive import DriveClient, FolderScanner
 from ..core.formatting import format_size, format_duration, dedupe_files_by_newest
-from ..ui.terminal import print_progress, print_long_path_warning
-from ..ui.keyboard import wait_with_skip
+from ..ui.primitives import print_progress, print_long_path_warning, wait_with_skip
 from .cache import clear_cache, clear_folder_cache
 from .download_planner import plan_downloads
 from .purge_planner import plan_purge, find_partial_downloads
@@ -272,7 +271,7 @@ def purge_all_folders(
         user_settings: UserSettings instance for checking enabled states
         sync_state: SyncState instance for checking tracked files (optional)
     """
-    from ..ui.purge import format_purge_tree
+    from ..ui.components import format_purge_tree
 
     print()
     print("=" * 50)

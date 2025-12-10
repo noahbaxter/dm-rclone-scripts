@@ -4,7 +4,7 @@ Sync operations module.
 Handles file downloading, sync logic, and progress tracking.
 """
 
-from .progress import ProgressTracker
+from ..core.progress import ProgressTracker  # Re-export from core for backwards compat
 from .cache import clear_cache, clear_folder_cache
 from .status import SyncStatus, get_sync_status
 from .download_planner import DownloadTask, plan_downloads

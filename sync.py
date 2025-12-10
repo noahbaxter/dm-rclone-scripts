@@ -39,9 +39,9 @@ from src.ui import (
     Colors,
     compute_main_menu_cache,
 )
-from src.ui.terminal import clear_screen, set_terminal_size
-from src.ui.logging import TeeOutput
-from src.ui.keyboard import wait_with_skip
+from src.ui.primitives import clear_screen, wait_with_skip
+from src.ui.primitives.terminal import set_terminal_size
+from src.core.logging import TeeOutput
 from src.sync import count_purgeable_detailed, clear_scan_cache
 from src.drive.client import DriveClientConfig
 

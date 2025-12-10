@@ -1,82 +1,113 @@
 """
 User interface module.
 
-Handles terminal UI, menus, keyboard input, and colors.
+Organized into layers:
+- primitives/: Terminal I/O (keyboard, colors, terminal control)
+- components/: Visual building blocks (box, header, formatting)
+- widgets/: Interactive reusable pieces (menu, confirm, progress)
+- screens/: Full-page views (home, drive_config, oauth, add_folder)
 """
 
-from .colors import Colors, rgb, lerp_color
-from .keyboard import (
-    CancelInput,
+# Re-export commonly used items for convenience
+from .primitives import (
+    # Terminal
+    clear_screen,
+    get_terminal_width,
+    print_progress,
+    # Keyboard
     getch,
-    check_esc_pressed,
     input_with_esc,
     wait_for_key,
-    menu_input,
     wait_with_skip,
+    CancelInput,
     KEY_UP,
     KEY_DOWN,
-    KEY_LEFT,
-    KEY_RIGHT,
     KEY_ENTER,
     KEY_ESC,
-    KEY_BACKSPACE,
-    KEY_TAB,
     KEY_SPACE,
+    # Colors
+    Colors,
+    rgb,
 )
-from .menu import (
+from .components import (
+    print_header,
+    strip_ansi,
+    format_colored_count,
+    format_colored_size,
+    format_sync_subtitle,
+    format_purge_tree,
+)
+from .widgets import (
     Menu,
     MenuItem,
     MenuDivider,
+    MenuGroupHeader,
     MenuAction,
     MenuResult,
-    print_header,
+    ConfirmDialog,
+    FolderProgress,
+)
+from .screens import (
+    HomeScreen,
+    MainMenuCache,
+    compute_main_menu_cache,
+    show_main_menu,
+    DriveConfigScreen,
+    show_subfolder_settings,
+    OAuthPromptScreen,
+    show_oauth_prompt,
+    AddFolderScreen,
+    show_add_custom_folder,
 )
 
-# Note: screens imported lazily to avoid circular import with sync module
-
-
-def __getattr__(name):
-    """Lazy import for screens module to avoid circular imports."""
-    if name in ("show_main_menu", "show_subfolder_settings", "compute_main_menu_cache", "show_confirmation", "show_oauth_prompt", "show_add_custom_folder"):
-        from . import screens
-        return getattr(screens, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
+# Backwards compatibility - show_confirmation is now ConfirmDialog
+def show_confirmation(title: str, message: str = None) -> bool:
+    """Show a Yes/No confirmation dialog."""
+    return ConfirmDialog(title, message).run()
 
 __all__ = [
-    # Colors
-    "Colors",
-    "rgb",
-    "lerp_color",
-    # Keyboard
-    "CancelInput",
+    # Primitives
+    "clear_screen",
+    "get_terminal_width",
+    "print_progress",
     "getch",
-    "check_esc_pressed",
     "input_with_esc",
     "wait_for_key",
-    "menu_input",
     "wait_with_skip",
+    "CancelInput",
     "KEY_UP",
     "KEY_DOWN",
-    "KEY_LEFT",
-    "KEY_RIGHT",
     "KEY_ENTER",
     "KEY_ESC",
-    "KEY_BACKSPACE",
-    "KEY_TAB",
     "KEY_SPACE",
-    # Menu
+    "Colors",
+    "rgb",
+    # Components
+    "print_header",
+    "strip_ansi",
+    "format_colored_count",
+    "format_colored_size",
+    "format_sync_subtitle",
+    "format_purge_tree",
+    # Widgets
     "Menu",
     "MenuItem",
     "MenuDivider",
+    "MenuGroupHeader",
     "MenuAction",
     "MenuResult",
-    "print_header",
-    # Screens (lazy loaded)
-    "show_main_menu",
-    "show_subfolder_settings",
+    "ConfirmDialog",
+    "FolderProgress",
+    # Screens
+    "HomeScreen",
+    "MainMenuCache",
     "compute_main_menu_cache",
-    "show_confirmation",
+    "show_main_menu",
+    "DriveConfigScreen",
+    "show_subfolder_settings",
+    "OAuthPromptScreen",
     "show_oauth_prompt",
+    "AddFolderScreen",
     "show_add_custom_folder",
+    "show_confirmation",
 ]

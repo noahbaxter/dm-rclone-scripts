@@ -8,8 +8,8 @@ import shutil
 import time
 from pathlib import Path
 
-from ..core.constants import CHART_MARKERS
-from ..sync.progress import ProgressTracker
+from src.core.constants import CHART_MARKERS
+from src.core.progress import ProgressTracker
 
 
 class FolderProgress(ProgressTracker):

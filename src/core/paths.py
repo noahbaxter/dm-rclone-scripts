@@ -34,8 +34,8 @@ def get_app_dir() -> Path:
     """
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
-    # Development: repo root (parent of src/)
-    return Path(__file__).parent.parent
+    # Development: repo root (parent of src/core/)
+    return Path(__file__).parent.parent.parent
 
 
 def get_bundle_dir() -> Path:
