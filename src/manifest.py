@@ -14,7 +14,7 @@ from typing import Optional
 import requests
 
 from .utils import name_sort_key, format_size
-from .paths import get_manifest_path
+from .core.paths import get_manifest_path
 
 # Remote manifest URL (GitHub releases)
 MANIFEST_URL = "https://github.com/noahbaxter/dm-rclone-scripts/releases/download/manifest/manifest.json"

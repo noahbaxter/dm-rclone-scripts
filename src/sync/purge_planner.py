@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple, Optional
 
-from ..constants import VIDEO_EXTENSIONS
+from ..core.constants import VIDEO_EXTENSIONS
 from .cache import scan_local_files
 from .sync_state import SyncState
 

@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from ..constants import CHART_MARKERS
+from ..core.constants import CHART_MARKERS
 
 
 @dataclass

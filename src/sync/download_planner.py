@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple, Optional
 
-from ..constants import CHART_ARCHIVE_EXTENSIONS, VIDEO_EXTENSIONS
-from ..file_ops import file_exists_with_size
-from ..utils import sanitize_path
+from ..core.constants import CHART_ARCHIVE_EXTENSIONS, VIDEO_EXTENSIONS
+from ..core.files import file_exists_with_size
+from ..core.formatting import sanitize_path
 from .sync_state import SyncState
 
 # Windows MAX_PATH limit (260 chars including null terminator)

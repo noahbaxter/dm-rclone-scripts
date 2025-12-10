@@ -8,7 +8,7 @@ import shutil
 import time
 from pathlib import Path
 
-from ..constants import CHART_MARKERS
+from ..core.constants import CHART_MARKERS
 from ..sync.progress import ProgressTracker
 
 

@@ -9,7 +9,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS
+from ..core.constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS
 from ..stats import get_best_stats
 from ..utils import sanitize_path, dedupe_files_by_newest
 from .cache import scan_local_files, scan_actual_charts

@@ -10,7 +10,7 @@ import zipfile
 from pathlib import Path
 from typing import Tuple, Set
 
-from ..constants import VIDEO_EXTENSIONS
+from ..core.constants import VIDEO_EXTENSIONS
 
 # Optional archive format support
 try:

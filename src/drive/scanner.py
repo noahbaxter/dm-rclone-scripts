@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 from .client import DriveClient
-from ..file_ops import file_exists_with_size
+from ..core.files import file_exists_with_size
 
 
 @dataclass

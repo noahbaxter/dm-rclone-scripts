@@ -19,8 +19,8 @@ from dataclasses import dataclass
 import aiohttp
 import certifi
 
-from ..constants import VIDEO_EXTENSIONS
-from ..paths import get_extract_tmp_dir
+from ..core.constants import VIDEO_EXTENSIONS
+from ..core.paths import get_extract_tmp_dir
 from .extractor import extract_archive, get_folder_size, delete_video_files, scan_extracted_files
 from .download_planner import DownloadTask
 from .sync_state import SyncState

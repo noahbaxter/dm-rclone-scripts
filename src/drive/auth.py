@@ -162,7 +162,7 @@ class UserOAuthManager:
             token_path: Path to save/load user token (default: .dm-sync/token.json)
         """
         if token_path is None:
-            from ..paths import get_token_path
+            from ..core.paths import get_token_path
             token_path = get_token_path()
         self.token_path = token_path
         self._credentials: Optional[Credentials] = None
@@ -248,7 +248,7 @@ class UserOAuthManager:
             return False
 
         # Import credentials from constants
-        from ..constants import (
+        from ..core.constants import (
             USER_OAUTH_CLIENT_ID,
             USER_OAUTH_CLIENT_SECRET,
             USER_OAUTH_SCOPES,

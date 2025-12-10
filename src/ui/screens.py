@@ -435,7 +435,7 @@ def _compute_setlist_stats_from_files(folder: dict, dedupe: bool = True) -> dict
     Returns dict mapping setlist name to {archives: int, charts: int, total_size: int}
     """
     from ..sync.download_planner import is_archive_file
-    from ..constants import CHART_MARKERS
+    from ..core.constants import CHART_MARKERS
 
     stats = {}
     files = folder.get("files", [])

@@ -9,7 +9,7 @@ a pre-built manifest approach that eliminates API calls for end users.
 from .manifest import Manifest, fetch_manifest
 from .config import DrivesConfig, UserSettings, DriveConfig, CustomFolders, extract_subfolders_from_manifest
 from .utils import format_size, format_duration, print_progress, clear_screen, set_terminal_size, TeeOutput
-from .paths import (
+from .core.paths import (
     get_app_dir,
     get_bundle_dir,
     get_data_dir,
