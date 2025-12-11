@@ -3,7 +3,7 @@ Local filesystem scanning module for chart statistics.
 
 This module provides accurate chart counts by scanning the actual downloaded
 and extracted content on disk, which is more reliable than manifest data
-(especially for nested archives like Guitar Hero game rips).
+(especially for nested archives like game rips).
 """
 
 import os

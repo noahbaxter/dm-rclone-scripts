@@ -220,7 +220,7 @@ class SyncState:
         Add an extracted archive to the tree.
 
         Args:
-            path: Archive path (e.g., "Guitar Hero/(2005) Guitar Hero/Guitar Hero.7z")
+            path: Archive path (e.g., "DriveName/Setlist/archive.7z")
             md5: Archive MD5 hash
             archive_size: Size of the archive file
             files: Dict of {relative_path: size} for extracted files

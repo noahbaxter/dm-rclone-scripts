@@ -17,7 +17,7 @@ from src.stats import get_best_stats
 def main():
     if len(sys.argv) < 2:
         print("Usage: python scripts/setlist_debug.py <path_to_drive_folder>")
-        print("Example: python scripts/setlist_debug.py '/path/to/Sync Charts/Guitar Hero'")
+        print("Example: python scripts/setlist_debug.py '/path/to/Sync Charts/DriveName'")
         return 1
 
     path = Path(sys.argv[1])

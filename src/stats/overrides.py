@@ -98,7 +98,7 @@ class ManifestOverrides:
         Get overrides for a folder by name.
 
         Args:
-            folder_name: Name of the drive folder (e.g., "Guitar Hero")
+            folder_name: Name of the drive folder
 
         Returns:
             FolderOverride if exists, None otherwise

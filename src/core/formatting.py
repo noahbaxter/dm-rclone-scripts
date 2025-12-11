@@ -13,7 +13,7 @@ from typing import Any, Callable, List, Optional
 ILLEGAL_CHAR_MAP = {
     "<": "-",
     ">": "-",
-    ":": " -",   # Colon -> space-dash (e.g., "Guitar Hero: Aerosmith" -> "Guitar Hero - Aerosmith")
+    ":": " -",   # Colon -> space-dash (e.g., "Title: Subtitle" -> "Title - Subtitle")
     '"': "'",
     "\\": "-",
     "/": "-",

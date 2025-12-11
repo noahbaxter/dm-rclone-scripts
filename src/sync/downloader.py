@@ -309,7 +309,7 @@ class FileDownloader:
         Args:
             task: Download task with archive info
             sync_state: SyncState instance to update (optional for backward compat)
-            archive_rel_path: Relative path of archive in manifest (e.g., "Guitar Hero/(2005) Guitar Hero/Guitar Hero.7z")
+            archive_rel_path: Relative path of archive in manifest (e.g., "DriveName/Setlist/archive.7z")
 
         Returns:
             Tuple of (success, error_message, extracted_files_dict)

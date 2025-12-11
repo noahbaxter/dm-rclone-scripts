@@ -57,9 +57,9 @@ def _check_archive_synced(
 
     Args:
         sync_state: SyncState instance (can be None)
-        folder_name: Folder name (e.g., "Guitar Hero")
-        checksum_path: Parent path within folder (e.g., "(2005) Guitar Hero")
-        archive_name: Archive filename (e.g., "Guitar Hero.7z")
+        folder_name: Folder name
+        checksum_path: Parent path within folder
+        archive_name: Archive filename
         manifest_md5: Expected MD5 from manifest
 
     Returns:
@@ -284,7 +284,7 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None, sync_sta
 
         # Adjustment for nested archives: use get_best_stats() which checks
         # local scan > overrides > manifest for each setlist's chart count.
-        # This handles Guitar Hero where 1 archive = 86 charts inside.
+        # This handles game rips where 1 archive = many charts inside.
         subfolders = folder.get("subfolders", [])
         if subfolders and not is_custom:
             # Sum up chart counts for ENABLED setlists using get_best_stats
@@ -326,7 +326,7 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None, sync_sta
                         folder_synced_charts += 1
 
             # If best stats has more charts than computed, we have nested archives
-            # (1 archive = many songs inside, like Guitar Hero)
+            # (1 archive = many songs inside, like game rips)
             if best_total_charts > folder_computed_charts:
                 # Adjust totals: remove computed, add best stats
                 status.total_charts -= folder_computed_charts
