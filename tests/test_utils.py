@@ -4,15 +4,21 @@ Tests for utility functions.
 
 import pytest
 
-from src.core.formatting import sanitize_filename, sanitize_path, dedupe_files_by_newest
+from src.core.formatting import (
+    sanitize_filename,
+    sanitize_path,
+    dedupe_files_by_newest,
+    format_size,
+    format_duration,
+)
 
 
 class TestSanitizeFilename:
     """Tests for sanitize_filename() - cross-platform filename safety."""
 
     def test_colon_becomes_space_dash(self):
-        """Colon → ' -' (common in game titles like 'Guitar Hero: Aerosmith')."""
-        assert sanitize_filename("Guitar Hero: Aerosmith") == "Guitar Hero - Aerosmith"
+        """Colon → ' -' (common in titles with subtitles)."""
+        assert sanitize_filename("Title: Subtitle") == "Title - Subtitle"
 
     def test_question_mark_removed(self):
         """Question mark removed entirely."""
@@ -87,11 +93,11 @@ class TestSanitizePath:
 
     def test_single_component(self):
         """Single path component (no slashes)."""
-        assert sanitize_path("Guitar Hero: Aerosmith") == "Guitar Hero - Aerosmith"
+        assert sanitize_path("Title: Subtitle") == "Title - Subtitle"
 
     def test_multi_component(self):
         """Multiple path components each sanitized independently."""
-        assert sanitize_path("Guitar Hero: Aerosmith/song.zip") == "Guitar Hero - Aerosmith/song.zip"
+        assert sanitize_path("Title: Subtitle/song.zip") == "Title - Subtitle/song.zip"
 
     def test_deeply_nested(self):
         """Deeply nested paths."""
@@ -142,8 +148,8 @@ class TestDedupeFilesByNewest:
     def test_colon_treated_as_duplicate(self):
         """Paths differing only by colon (sanitized to ' -') are duplicates."""
         files = [
-            {"path": "Guitar Hero: Aerosmith/song.zip", "modified": "2023-01-01T00:00:00Z"},
-            {"path": "Guitar Hero - Aerosmith/song.zip", "modified": "2022-01-01T00:00:00Z"},
+            {"path": "Title: Subtitle/song.zip", "modified": "2023-01-01T00:00:00Z"},
+            {"path": "Title - Subtitle/song.zip", "modified": "2022-01-01T00:00:00Z"},
         ]
         result = dedupe_files_by_newest(files)
         assert len(result) == 1
@@ -160,6 +166,60 @@ class TestDedupeFilesByNewest:
     def test_empty_list_returns_empty(self):
         """Empty input returns empty output."""
         assert dedupe_files_by_newest([]) == []
+
+
+class TestFormatSize:
+    """Tests for format_size() - human readable byte sizes."""
+
+    def test_bytes(self):
+        """Small values shown in bytes."""
+        assert format_size(0) == "0.0 B"
+        assert format_size(500) == "500.0 B"
+        assert format_size(1023) == "1023.0 B"
+
+    def test_kilobytes(self):
+        """KB range."""
+        assert format_size(1024) == "1.0 KB"
+        assert format_size(1536) == "1.5 KB"
+        assert format_size(1024 * 500) == "500.0 KB"
+
+    def test_megabytes(self):
+        """MB range."""
+        assert format_size(1024 * 1024) == "1.0 MB"
+        assert format_size(1024 * 1024 * 50) == "50.0 MB"
+
+    def test_gigabytes(self):
+        """GB range."""
+        assert format_size(1024 * 1024 * 1024) == "1.0 GB"
+        assert format_size(1024 * 1024 * 1024 * 2.5) == "2.5 GB"
+
+    def test_terabytes(self):
+        """TB range."""
+        assert format_size(1024 * 1024 * 1024 * 1024) == "1.0 TB"
+
+
+class TestFormatDuration:
+    """Tests for format_duration() - human readable time durations."""
+
+    def test_seconds_only(self):
+        """Durations under 60s shown in seconds."""
+        assert format_duration(0) == "0.0s"
+        assert format_duration(45) == "45.0s"
+        assert format_duration(59.9) == "59.9s"
+
+    def test_minutes_and_seconds(self):
+        """Durations under 1 hour shown in minutes and seconds."""
+        assert format_duration(60) == "1m 0s"
+        assert format_duration(90) == "1m 30s"
+        assert format_duration(125) == "2m 5s"
+        assert format_duration(3599) == "59m 59s"
+
+    def test_hours_and_minutes(self):
+        """Durations 1 hour+ shown in hours and minutes."""
+        assert format_duration(3600) == "1h 0m"
+        assert format_duration(3660) == "1h 1m"
+        assert format_duration(7200) == "2h 0m"
+        assert format_duration(5400) == "1h 30m"
 
 
 if __name__ == "__main__":

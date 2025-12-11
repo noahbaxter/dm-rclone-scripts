@@ -32,17 +32,17 @@ class TestSyncStateArchiveTracking:
 
         # Add an archive
         sync_state.add_archive(
-            path="Guitar Hero/(2005) Guitar Hero/Guitar Hero.7z",
+            path="TestDrive/Setlist/pack.7z",
             md5="abc123",
             archive_size=1000000,
             files={"song.ini": 100, "notes.mid": 500}
         )
 
         # Check synced with correct MD5
-        assert sync_state.is_archive_synced("Guitar Hero/(2005) Guitar Hero/Guitar Hero.7z", "abc123")
+        assert sync_state.is_archive_synced("TestDrive/Setlist/pack.7z", "abc123")
 
         # Check not synced with wrong MD5
-        assert not sync_state.is_archive_synced("Guitar Hero/(2005) Guitar Hero/Guitar Hero.7z", "wrong_md5")
+        assert not sync_state.is_archive_synced("TestDrive/Setlist/pack.7z", "wrong_md5")
 
         # Check not synced for non-existent archive
         assert not sync_state.is_archive_synced("NonExistent/archive.7z", "abc123")
@@ -130,38 +130,33 @@ class TestGetSyncStatusWithSyncState:
 
     def test_archive_recognized_as_synced(self, temp_dir):
         """get_sync_status recognizes archives tracked in sync_state."""
-        # Create folder structure
-        folder_path = temp_dir / "Guitar Hero" / "(2005) Guitar Hero"
+        folder_path = temp_dir / "TestDrive" / "Setlist"
         folder_path.mkdir(parents=True)
 
-        # Create extracted files on disk
         (folder_path / "song.ini").write_text("[song]")
         (folder_path / "notes.mid").write_bytes(b"midi")
 
-        # Create sync_state with matching archive
         sync_state = SyncState(temp_dir)
         sync_state.load()
         sync_state.add_archive(
-            path="Guitar Hero/(2005) Guitar Hero/Guitar Hero.7z",
+            path="TestDrive/Setlist/pack.7z",
             md5="test_md5_hash",
             archive_size=5000,
             files={"song.ini": 6, "notes.mid": 4}
         )
 
-        # Create manifest
         folder = {
             "folder_id": "test123",
-            "name": "Guitar Hero",
+            "name": "TestDrive",
             "files": [
                 {
-                    "path": "(2005) Guitar Hero/Guitar Hero.7z",
+                    "path": "Setlist/pack.7z",
                     "md5": "test_md5_hash",
                     "size": 5000
                 }
             ]
         }
 
-        # Get sync status WITH sync_state
         status = get_sync_status([folder], temp_dir, None, sync_state)
 
         assert status.synced_charts == 1
@@ -169,28 +164,25 @@ class TestGetSyncStatusWithSyncState:
 
     def test_archive_not_synced_without_sync_state(self, temp_dir):
         """Without sync_state (and no check.txt), archive shows as not synced."""
-        folder_path = temp_dir / "Guitar Hero" / "(2005) Guitar Hero"
+        folder_path = temp_dir / "TestDrive" / "Setlist"
         folder_path.mkdir(parents=True)
 
-        # Create extracted files but NO sync_state or check.txt
         (folder_path / "song.ini").write_text("[song]")
 
         folder = {
             "folder_id": "test123",
-            "name": "Guitar Hero",
+            "name": "TestDrive",
             "files": [
                 {
-                    "path": "(2005) Guitar Hero/Guitar Hero.7z",
+                    "path": "Setlist/pack.7z",
                     "md5": "test_md5_hash",
                     "size": 5000
                 }
             ]
         }
 
-        # Get sync status WITHOUT sync_state
         status = get_sync_status([folder], temp_dir, None, None)
 
-        # Should show as not synced (no check.txt, no sync_state)
         assert status.synced_charts == 0
         assert status.total_charts == 1
 
