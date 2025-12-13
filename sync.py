@@ -9,34 +9,16 @@ manifest, eliminating the need for users to scan Google Drive.
 import argparse
 import os
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
 
-from src import (
-    DriveClient,
-    Manifest,
-    FolderSync,
-    AuthManager,
-    purge_all_folders,
-    clear_screen,
-    set_terminal_size,
-    print_header,
-    show_main_menu,
-    show_subfolder_settings,
-    show_confirmation,
-    show_oauth_prompt,
-    show_add_custom_folder,
-    UserSettings,
-    DrivesConfig,
-    CustomFolders,
-    Colors,
-    extract_subfolders_from_manifest,
-    compute_main_menu_cache,
-    format_size,
-    TeeOutput,
-    fetch_manifest,
-    # Paths
+from src.drive import DriveClient, AuthManager
+from src.manifest import Manifest, fetch_manifest
+from src.sync import FolderSync, purge_all_folders
+from src.sync.state import SyncState
+from src.config import UserSettings, DrivesConfig, CustomFolders, extract_subfolders_from_manifest
+from src.core.formatting import format_size
+from src.core.paths import (
     get_data_dir,
     get_settings_path,
     get_token_path,
@@ -44,9 +26,22 @@ from src import (
     get_download_path,
     get_drives_config_path,
     migrate_legacy_files,
+    cleanup_tmp_dir,
 )
-from src.ui.keyboard import wait_with_skip
-from src.sync.operations import count_purgeable_detailed, clear_scan_cache, repair_all_checksums
+from src.ui import (
+    print_header,
+    show_main_menu,
+    show_subfolder_settings,
+    show_confirmation,
+    show_oauth_prompt,
+    show_add_custom_folder,
+    Colors,
+    compute_main_menu_cache,
+)
+from src.sync import FolderStatsCache, count_purgeable_detailed, clear_scan_cache
+from src.ui.primitives import clear_screen, wait_with_skip
+from src.ui.primitives.terminal import set_terminal_size
+from src.core.logging import TeeOutput
 from src.drive.client import DriveClientConfig
 
 # ============================================================================
@@ -78,13 +73,27 @@ class SyncApp:
         # Unified auth manager (handles user + admin fallback, token refresh)
         self.auth = AuthManager(token_path=get_token_path())
 
+        # Clean up any leftover temp files from interrupted operations
+        cleanup_tmp_dir()
+
+        # Load sync state (tracks all synced files)
+        self.sync_state = SyncState(get_download_path())
+        self.sync_state.load()
+
+        # Clean up legacy check.txt files (replaced by sync_state.json)
+        deleted = self.sync_state.cleanup_check_txt_files()
+        if deleted > 0:
+            print(f"Cleaned up {deleted} legacy check.txt file(s)")
+
         self.sync = FolderSync(
             self.client,
             auth_token=self.auth.get_token_getter(),
-            delete_videos=self.user_settings.delete_videos
+            delete_videos=self.user_settings.delete_videos,
+            sync_state=self.sync_state,
         )
         self.folders = []
         self.use_local_manifest = use_local_manifest
+        self.folder_stats_cache = FolderStatsCache()
 
     def load_manifest(self, quiet: bool = False):
         """Load manifest folders (includes custom folders)."""
@@ -93,11 +102,7 @@ class SyncApp:
                 print("Loading local manifest...")
             else:
                 print("Fetching folder list...")
-        fetch_start = time.time()
         manifest_data = fetch_manifest(use_local=self.use_local_manifest)
-        fetch_time = time.time() - fetch_start
-        if fetch_time > 2.0 and not quiet:
-            print(f"  [perf] Manifest fetched in {fetch_time:.1f}s")
 
         # Filter out hidden drives
         hidden_ids = {d.folder_id for d in self.drives_config.drives if d.hidden}
@@ -122,8 +127,13 @@ class SyncApp:
             }
             self.folders.append(folder_dict)
 
-    def handle_download(self, indices: list):
-        """Handle folder download."""
+    def handle_sync(self):
+        """Sync all enabled folders: download missing files, then purge extras.
+
+        This ensures local state matches the manifest exactly.
+        """
+        indices = list(range(len(self.folders)))
+
         # Filter out disabled drives
         enabled_indices = [
             i for i in indices
@@ -131,7 +141,7 @@ class SyncApp:
         ]
 
         if not enabled_indices:
-            print("\nNo drives enabled. Enable at least one drive to download.")
+            print("\nNo drives enabled. Enable at least one drive to sync.")
             return
 
         # Scan custom folders that need scanning (no files yet)
@@ -139,43 +149,41 @@ class SyncApp:
 
         # Get disabled subfolders for filtering
         disabled_map = self._get_disabled_subfolders_for_folders(enabled_indices)
+
+        # Step 1: Download missing files
         self.sync.download_folders(self.folders, enabled_indices, get_download_path(), disabled_map)
         clear_scan_cache()  # Invalidate filesystem cache after download
+        self.folder_stats_cache.invalidate_all()  # Invalidate all folder stats
 
-    def handle_purge(self) -> bool:
-        """Purge disabled/extra files from all folders.
-
-        Returns:
-            True if purge was performed, False if cancelled or nothing to purge.
-        """
-        # Check what would be purged
+        # Step 2: Purge extra files (no confirmation - sync means make it match)
         stats = count_purgeable_detailed(
-            self.folders, get_download_path(), self.user_settings
+            self.folders, get_download_path(), self.user_settings, self.sync_state
         )
 
-        if stats.total_files == 0:
-            return False
+        if stats.total_files > 0:
+            print()
+            print("=" * 50)
+            print("Cleaning up extra files...")
+            print("=" * 50)
 
-        # Build detailed message showing breakdown
-        parts = []
-        if stats.chart_count > 0:
-            parts.append(f"{stats.chart_count} chart files ({format_size(stats.chart_size)})")
-        if stats.extra_file_count > 0:
-            parts.append(f"{stats.extra_file_count} extra files ({format_size(stats.extra_file_size)})")
-        if stats.partial_count > 0:
-            parts.append(f"{stats.partial_count} partial downloads ({format_size(stats.partial_size)})")
+            # Build summary of what's being purged
+            parts = []
+            if stats.chart_count > 0:
+                parts.append(f"{stats.chart_count} chart files ({format_size(stats.chart_size)})")
+            if stats.extra_file_count > 0:
+                parts.append(f"{stats.extra_file_count} extra files ({format_size(stats.extra_file_size)})")
+            if stats.partial_count > 0:
+                parts.append(f"{stats.partial_count} partial downloads ({format_size(stats.partial_size)})")
 
-        message = f"{Colors.RED}This will delete: {', '.join(parts)}{Colors.RESET}"
-        if not show_confirmation("Are you sure you want to purge?", message):
-            return False
+            print(f"Removing: {', '.join(parts)}")
 
-        purge_all_folders(self.folders, get_download_path(), self.user_settings)
-        clear_scan_cache()  # Invalidate filesystem cache after purge
-        return True
+            purge_all_folders(self.folders, get_download_path(), self.user_settings, self.sync_state)
+            clear_scan_cache()  # Invalidate filesystem cache after purge
+            self.folder_stats_cache.invalidate_all()  # Invalidate all folder stats
 
-    def handle_repair(self):
-        """Repair check.txt files with missing/incorrect size data."""
-        repair_all_checksums(self.folders, get_download_path())
+            print("Cleanup complete.")
+        else:
+            print("\nSync complete - no extra files to clean up.")
 
     def handle_configure_drive(self, folder_id: str):
         """Configure setlists for a specific drive, or show options for custom folders."""
@@ -184,7 +192,10 @@ class SyncApp:
             return
 
         # Show subfolder settings (works for both regular and custom folders)
-        result = show_subfolder_settings(folder, self.user_settings, get_download_path())
+        result = show_subfolder_settings(folder, self.user_settings, get_download_path(), self.sync_state)
+
+        # Invalidate this folder's stats (setlists may have changed)
+        self.folder_stats_cache.invalidate(folder_id)
 
         # Handle custom folder actions
         if result == "scan":
@@ -236,7 +247,7 @@ class SyncApp:
             return
 
         if result.value == "setlists":
-            show_subfolder_settings(folder, self.user_settings, get_download_path())
+            show_subfolder_settings(folder, self.user_settings, get_download_path(), self.sync_state)
         elif result.value == "scan":
             self._scan_single_custom_folder(folder)
         elif result.value == "remove":
@@ -319,6 +330,8 @@ class SyncApp:
         """Toggle a drive on/off at the top level (preserves setlist settings)."""
         self.user_settings.toggle_drive(folder_id)
         self.user_settings.save()
+        # Only invalidate this folder's stats
+        self.folder_stats_cache.invalidate(folder_id)
 
     def handle_toggle_group(self, group_name: str):
         """Toggle a group expanded/collapsed."""
@@ -415,7 +428,8 @@ class SyncApp:
         self.sync = FolderSync(
             self.client,
             auth_token=self.auth.get_token_getter(),
-            delete_videos=self.user_settings.delete_videos
+            delete_videos=self.user_settings.delete_videos,
+            sync_state=self.sync_state,
         )
 
     def _get_folder_by_id(self, folder_id: str) -> dict | None:
@@ -575,13 +589,14 @@ class SyncApp:
             if menu_cache is None:
                 menu_cache = compute_main_menu_cache(
                     self.folders, self.user_settings,
-                    get_download_path(), combined_drives
+                    get_download_path(), combined_drives,
+                    self.sync_state, self.folder_stats_cache
                 )
 
             action, value, menu_pos = show_main_menu(
                 self.folders, self.user_settings, selected_index,
                 get_download_path(), combined_drives, cache=menu_cache,
-                auth=self.auth
+                auth=self.auth, sync_state=self.sync_state
             )
             selected_index = menu_pos  # Always preserve menu position
 
@@ -589,18 +604,10 @@ class SyncApp:
                 print("\nGoodbye!")
                 break
 
-            elif action == "download":
+            elif action == "sync":
                 if self.folders:
-                    self.handle_download(list(range(len(self.folders))))
-                menu_cache = None  # Invalidate cache after download
-
-            elif action == "purge":
-                self.handle_purge()
-                menu_cache = None  # Invalidate cache after purge
-
-            elif action == "repair":
-                self.handle_repair()
-                menu_cache = None  # Invalidate cache after repair
+                    self.handle_sync()
+                menu_cache = None  # Invalidate cache after sync
 
             elif action == "configure":
                 # Enter on a drive - go directly to configure that drive
@@ -616,6 +623,13 @@ class SyncApp:
                 # Enter/Space on a group - expand/collapse (NO cache invalidation!)
                 self.handle_toggle_group(value)
                 # Keep using the same cache - just showing/hiding items
+
+            elif action == "cycle_delta_mode":
+                # Tab - cycle between size/files display mode
+                self.user_settings.cycle_delta_mode()
+                self.user_settings.save()
+                self.folder_stats_cache.invalidate_all()  # Clear cached display strings
+                menu_cache = None  # Invalidate cache to refresh display
 
             elif action == "signin":
                 self.handle_signin()

@@ -6,16 +6,44 @@ Counts charts (folder, zip, sng) within a file list, organized by top-level subf
 
 from collections import defaultdict
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import List, Dict
 
-from .detector import (
-    is_sng_file,
-    is_zip_file,
-    has_folder_chart_markers,
-)
-from .base import ChartType
-from ..utils import sort_by_name
+from ..core.formatting import sort_by_name
+
+
+class ChartType(Enum):
+    """Types of chart formats."""
+    FOLDER = "folder"  # Loose files in a folder
+    ZIP = "zip"        # Compressed archive
+    SNG = "sng"        # Single .sng container
+
+
+# File extensions that indicate chart content
+CHART_NOTE_FILES = {"notes.mid", "notes.chart"}
+CHART_INI_FILES = {"song.ini"}
+
+# Archive extensions
+ZIP_EXTENSIONS = {".zip", ".rar", ".7z"}
+SNG_EXTENSION = ".sng"
+
+
+def is_sng_file(filename: str) -> bool:
+    """Check if filename is a .sng container."""
+    return filename.lower().endswith(SNG_EXTENSION)
+
+
+def is_zip_file(filename: str) -> bool:
+    """Check if filename is a zip/rar/7z archive."""
+    lower = filename.lower()
+    return any(lower.endswith(ext) for ext in ZIP_EXTENSIONS)
+
+
+def has_folder_chart_markers(filenames: set[str]) -> bool:
+    """Check if a set of filenames contains folder chart markers (song.ini or notes)."""
+    lower_names = {f.lower() for f in filenames}
+    return bool(lower_names & CHART_INI_FILES) or bool(lower_names & CHART_NOTE_FILES)
 
 
 @dataclass
@@ -194,7 +222,7 @@ def _count_root_charts(files: List[dict]) -> ChartCounts:
     return counts
 
 
-def _detect_chart_type_from_filenames(filenames: List[str]) -> ChartType | None:
+def detect_chart_type_from_filenames(filenames: List[str]) -> ChartType | None:
     """
     Detect chart type from a list of filenames in a folder.
 

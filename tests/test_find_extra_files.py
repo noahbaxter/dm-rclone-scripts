@@ -1,21 +1,26 @@
 """
-Tests for find_extra_files archive detection.
+Tests for find_extra_files_sync_state.
 
-Verifies that extracted archive contents aren't flagged as purgeable
-when check.txt contains the correct MD5 hash.
+Verifies that files tracked in sync_state aren't flagged as purgeable.
 """
 
-import json
 import tempfile
 from pathlib import Path
 
 import pytest
 
-from src.sync.operations import find_extra_files, _scan_local_files, clear_scan_cache
+from src.sync import clear_cache
+from src.sync.purge_planner import find_extra_files_sync_state
+from src.sync.state import SyncState
+from src.sync.cache import scan_local_files
+
+# Backwards compat
+_scan_local_files = scan_local_files
+clear_scan_cache = clear_cache
 
 
-class TestArchiveDetection:
-    """Tests for the check.txt archive validation in find_extra_files."""
+class TestSyncStateExtraFiles:
+    """Tests for sync_state-based extra file detection."""
 
     @pytest.fixture
     def temp_dir(self):
@@ -23,138 +28,86 @@ class TestArchiveDetection:
         with tempfile.TemporaryDirectory() as tmpdir:
             yield Path(tmpdir)
 
-    def test_extracted_archive_not_flagged_as_extra(self, temp_dir):
+    def test_tracked_files_not_flagged_as_extra(self, temp_dir):
         """
-        Extracted archive contents should not be flagged as extra files
-        when check.txt has matching MD5.
-
-        This is THE critical regression test. Before the fix:
-        - check.txt was read without archive_name parameter
-        - Multi-archive format {"archives": {...}} returned empty MD5
-        - All extracted files were incorrectly flagged as extra
-
-        After the fix:
-        - archive_name is passed to read_checksum()
-        - Multi-archive format is properly read
-        - Extracted files are recognized as valid
+        Files tracked in sync_state should not be flagged as extra.
         """
-        # Setup: create folder structure simulating extracted archive
-        base_path = temp_dir
         folder_name = "TestDrive"
-        folder_path = base_path / folder_name
+        folder_path = temp_dir / folder_name
         chart_folder = folder_path / "Setlist" / "SomeChart"
         chart_folder.mkdir(parents=True)
 
-        # Create extracted files (what would come from archive)
+        # Create files on disk
         (chart_folder / "song.ini").write_text("[song]\nname=Test")
         (chart_folder / "notes.mid").write_bytes(b"midi data")
         (chart_folder / "song.ogg").write_bytes(b"audio data")
 
-        # Create check.txt with multi-archive format (the format that broke)
-        archive_name = "SomeChart.7z"
-        archive_md5 = "abc123def456"
-        check_data = {
-            "archives": {
-                archive_name: {
-                    "md5": archive_md5,
-                    "size": 12345
-                }
+        # Set up sync_state with these files tracked
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+        sync_state.add_archive(
+            f"{folder_name}/Setlist/SomeChart/SomeChart.7z",
+            md5="abc123def456",
+            archive_size=5000,
+            files={
+                "song.ini": 18,
+                "notes.mid": 9,
+                "song.ogg": 10
             }
-        }
-        (chart_folder / "check.txt").write_text(json.dumps(check_data))
+        )
 
-        # Create manifest that references this archive
-        folder = {
-            "name": folder_name,
-            "files": [
-                {
-                    "path": f"Setlist/SomeChart/{archive_name}",
-                    "md5": archive_md5,
-                    "size": 5000
-                }
-            ]
-        }
+        # Find extra files
+        extras = find_extra_files_sync_state(folder_name, folder_path, sync_state)
 
-        # Execute: find extra files
-        extras = find_extra_files(folder, base_path)
-
-        # Assert: extracted files should NOT be flagged as extra
+        # Assert: tracked files should NOT be flagged as extra
         extra_names = [f.name for f, _ in extras]
         assert "song.ini" not in extra_names, "song.ini was incorrectly flagged as extra"
         assert "notes.mid" not in extra_names, "notes.mid was incorrectly flagged as extra"
         assert "song.ogg" not in extra_names, "song.ogg was incorrectly flagged as extra"
-        assert "check.txt" not in extra_names, "check.txt was incorrectly flagged as extra"
 
-    def test_mismatched_md5_flagged_as_extra(self, temp_dir):
-        """Files from archives with wrong MD5 should be flagged as extra."""
-        base_path = temp_dir
+    def test_untracked_files_flagged_as_extra(self, temp_dir):
+        """Files not in sync_state should be flagged as extra."""
         folder_name = "TestDrive"
-        folder_path = base_path / folder_name
+        folder_path = temp_dir / folder_name
         chart_folder = folder_path / "Setlist" / "SomeChart"
         chart_folder.mkdir(parents=True)
 
-        # Create extracted file
+        # Create files on disk
         (chart_folder / "song.ini").write_text("[song]\nname=Test")
+        (chart_folder / "extra_file.txt").write_text("not tracked")
 
-        # Create check.txt with WRONG MD5
-        check_data = {
-            "archives": {
-                "SomeChart.7z": {
-                    "md5": "wrong_md5_hash",
-                    "size": 12345
-                }
-            }
-        }
-        (chart_folder / "check.txt").write_text(json.dumps(check_data))
+        # Set up sync_state with only song.ini tracked
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+        sync_state.add_file(f"{folder_name}/Setlist/SomeChart/song.ini", size=18)
 
-        # Manifest has different MD5
-        folder = {
-            "name": folder_name,
-            "files": [
-                {
-                    "path": "Setlist/SomeChart/SomeChart.7z",
-                    "md5": "correct_md5_hash",
-                    "size": 5000
-                }
-            ]
-        }
+        extras = find_extra_files_sync_state(folder_name, folder_path, sync_state)
 
-        extras = find_extra_files(folder, base_path)
-
-        # With mismatched MD5, extracted files SHOULD be flagged
         extra_names = [f.name for f, _ in extras]
-        assert "song.ini" in extra_names, "Mismatched archive contents should be flagged"
+        assert "extra_file.txt" in extra_names, "Untracked file should be flagged"
+        assert "song.ini" not in extra_names, "Tracked file should not be flagged"
 
-    def test_no_check_txt_flagged_as_extra(self, temp_dir):
-        """Files without check.txt should be flagged as extra."""
-        base_path = temp_dir
+    def test_empty_sync_state_flags_all_files(self, temp_dir):
+        """With empty sync_state, all files should be flagged as extra."""
         folder_name = "TestDrive"
-        folder_path = base_path / folder_name
-        chart_folder = folder_path / "Setlist" / "SomeChart"
-        chart_folder.mkdir(parents=True)
+        folder_path = temp_dir / folder_name
+        folder_path.mkdir(parents=True)
 
-        # Create extracted file but NO check.txt
-        (chart_folder / "song.ini").write_text("[song]\nname=Test")
+        # Create files on disk
+        (folder_path / "file1.txt").write_text("content1")
+        (folder_path / "file2.txt").write_text("content2")
 
-        folder = {
-            "name": folder_name,
-            "files": [
-                {
-                    "path": "Setlist/SomeChart/SomeChart.7z",
-                    "md5": "some_md5",
-                    "size": 5000
-                }
-            ]
-        }
+        # Empty sync_state
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
 
-        extras = find_extra_files(folder, base_path)
+        extras = find_extra_files_sync_state(folder_name, folder_path, sync_state)
 
-        extra_names = [f.name for f, _ in extras]
-        assert "song.ini" in extra_names, "Files without check.txt should be flagged"
+        assert len(extras) == 2, "All files should be extras with empty sync_state"
 
 
 class TestFindExtraFilesWithCache:
-    """Tests for find_extra_files when passed pre-scanned local_files."""
+    """Tests for find_extra_files_sync_state when passed pre-scanned local_files."""
 
     @pytest.fixture
     def temp_dir(self):
@@ -163,47 +116,48 @@ class TestFindExtraFilesWithCache:
             yield Path(tmpdir)
 
     def test_with_explicit_local_files_param(self, temp_dir):
-        """find_extra_files should work correctly when passed cached local_files."""
-        folder_path = temp_dir / "TestDrive"
+        """find_extra_files_sync_state should work correctly when passed cached local_files."""
+        folder_name = "TestDrive"
+        folder_path = temp_dir / folder_name
         folder_path.mkdir()
 
         # Create expected and extra files
         (folder_path / "expected.txt").write_text("expected")
         (folder_path / "extra.txt").write_text("extra")
 
-        folder = {
-            "name": "TestDrive",
-            "files": [{"path": "expected.txt", "size": 8, "md5": "abc"}]
-        }
+        # Track expected.txt in sync_state
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+        sync_state.add_file(f"{folder_name}/expected.txt", size=8)
 
         # Pre-scan and pass explicitly (the optimized path)
         local_files = _scan_local_files(folder_path)
-        extras = find_extra_files(folder, temp_dir, local_files)
+        extras = find_extra_files_sync_state(folder_name, folder_path, sync_state, local_files)
 
         assert len(extras) == 1
         assert extras[0][0].name == "extra.txt"
 
     def test_empty_folder_returns_empty(self, temp_dir):
         """Empty folder should return no extras, not crash."""
-        folder_path = temp_dir / "EmptyDrive"
+        folder_name = "EmptyDrive"
+        folder_path = temp_dir / folder_name
         folder_path.mkdir()
 
-        folder = {
-            "name": "EmptyDrive",
-            "files": [{"path": "something.txt", "size": 10, "md5": "abc"}]
-        }
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
 
-        extras = find_extra_files(folder, temp_dir)
+        extras = find_extra_files_sync_state(folder_name, folder_path, sync_state)
         assert extras == []
 
     def test_nonexistent_folder_returns_empty(self, temp_dir):
         """Non-existent folder should return no extras, not crash."""
-        folder = {
-            "name": "DoesNotExist",
-            "files": [{"path": "file.txt", "size": 10, "md5": "abc"}]
-        }
+        folder_name = "DoesNotExist"
+        folder_path = temp_dir / folder_name
 
-        extras = find_extra_files(folder, temp_dir)
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+
+        extras = find_extra_files_sync_state(folder_name, folder_path, sync_state)
         assert extras == []
 
 

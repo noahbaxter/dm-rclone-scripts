@@ -30,7 +30,7 @@ def load_settings_from_sync_path(sync_path: Path):
     """Load UserSettings from the .dm-sync folder relative to sync path."""
     from src.config import UserSettings
 
-    # sync_path is like /path/to/Sync Charts/Guitar Hero
+    # sync_path is like /path/to/Sync Charts/DriveName
     # settings are at /path/to/Sync Charts/../.dm-sync/settings.json
     # or /path/to/.dm-sync/settings.json (parent of Sync Charts)
     settings_path = sync_path.parent.parent / ".dm-sync" / "settings.json"

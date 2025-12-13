@@ -1,5 +1,5 @@
 """
-Manifest management for DM Chart Sync.
+Manifest classes for DM Chart Sync.
 
 The manifest is a JSON file containing the complete file tree with checksums,
 eliminating the need for users to scan Google Drive.
@@ -8,16 +8,10 @@ eliminating the need for users to scan Google Drive.
 import json
 from pathlib import Path
 from datetime import datetime, timezone
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from typing import Optional
 
-import requests
-
-from .utils import name_sort_key, format_size
-from .paths import get_manifest_path
-
-# Remote manifest URL (GitHub releases)
-MANIFEST_URL = "https://github.com/noahbaxter/dm-rclone-scripts/releases/download/manifest/manifest.json"
+from ..core.formatting import name_sort_key, format_size
 
 
 @dataclass
@@ -31,6 +25,7 @@ class FileEntry:
     modified: str = ""
 
     def to_dict(self) -> dict:
+        from dataclasses import asdict
         return asdict(self)
 
     @classmethod
@@ -255,7 +250,7 @@ class Manifest:
             sort_by: Sort order - "charts", "size", or "name"
         """
         try:
-            from .ui.colors import Colors
+            from ..ui.colors import Colors
         except ImportError:
             from colors import Colors
 
@@ -300,54 +295,3 @@ class Manifest:
 
         print()
         print(f"Total: {total_charts} charts, {format_size(total_size)}")
-
-
-def fetch_manifest(use_local: bool = False) -> dict:
-    """
-    Fetch folder manifest from remote URL or local file.
-
-    Args:
-        use_local: If True, only read from local manifest.json (skip remote)
-
-    Returns:
-        Manifest data as dict
-    """
-    local_path = get_manifest_path()
-
-    if not use_local:
-        # Try remote first
-        try:
-            response = requests.get(MANIFEST_URL, timeout=10)
-            response.raise_for_status()
-            return response.json()
-        except Exception:
-            pass
-
-    # Use local manifest
-    if local_path.exists():
-        manifest = Manifest.load(local_path)
-        return manifest.to_dict()
-
-    print("Warning: Could not load folder manifest.\n")
-    return {"folders": []}
-
-
-if __name__ == "__main__":
-    import sys
-    import argparse
-
-    parser = argparse.ArgumentParser(description="View manifest contents")
-    parser.add_argument(
-        "--sort", "-s",
-        choices=["charts", "size", "name"],
-        default="charts",
-        help="Sort by: charts (default), size, or name"
-    )
-    args = parser.parse_args()
-
-    manifest_path = Path(__file__).parent.parent / "manifest.json"
-    if not manifest_path.exists():
-        print(f"Manifest not found: {manifest_path}")
-        sys.exit(1)
-    manifest = Manifest.load(manifest_path)
-    manifest.print_tree(sort_by=args.sort)

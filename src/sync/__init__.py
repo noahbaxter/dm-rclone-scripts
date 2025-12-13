@@ -4,24 +4,46 @@ Sync operations module.
 Handles file downloading, sync logic, and progress tracking.
 """
 
-from .progress import ProgressTracker
-from .downloader import FileDownloader, DownloadTask, DownloadResult, FolderProgress, repair_checksum_sizes
-from .operations import FolderSync, get_sync_status, SyncStatus, purge_all_folders, count_purgeable_files, count_purgeable_detailed, PurgeStats, clear_scan_cache, repair_all_checksums
+from ..core.progress import ProgressTracker  # Re-export from core for backwards compat
+from .cache import clear_cache, clear_folder_cache, FolderStats, FolderStatsCache
+from .status import SyncStatus, get_sync_status
+from .download_planner import DownloadTask, plan_downloads
+from .purge_planner import PurgeStats, count_purgeable_files, count_purgeable_detailed
+from .purger import delete_files
+from .folder_sync import FolderSync, purge_all_folders
+from .downloader import FileDownloader, DownloadResult
+from .state import SyncState
+
+# Backwards compatibility aliases
+clear_scan_cache = clear_cache
 
 __all__ = [
+    # Progress
     "ProgressTracker",
-    "FileDownloader",
-    "DownloadTask",
-    "DownloadResult",
-    "FolderProgress",
-    "FolderSync",
-    "get_sync_status",
+    # Cache
+    "clear_cache",
+    "clear_folder_cache",
+    "clear_scan_cache",  # Backwards compat
+    "FolderStats",
+    "FolderStatsCache",
+    # Sync status
     "SyncStatus",
-    "purge_all_folders",
+    "get_sync_status",
+    # Download planning
+    "DownloadTask",
+    "plan_downloads",
+    # Purge planning
+    "PurgeStats",
     "count_purgeable_files",
     "count_purgeable_detailed",
-    "PurgeStats",
-    "clear_scan_cache",
-    "repair_checksum_sizes",
-    "repair_all_checksums",
+    # Purger
+    "delete_files",
+    # Folder sync
+    "FolderSync",
+    "purge_all_folders",
+    # Downloader
+    "FileDownloader",
+    "DownloadResult",
+    # Sync state
+    "SyncState",
 ]

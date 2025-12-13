@@ -205,5 +205,156 @@ class TestArchiveEdgeCases:
         assert (dest / folder_name).exists()
         assert (dest / folder_name / "song.ini").exists()
 
+class TestProcessArchiveIntegration:
+    """
+    End-to-end integration tests for process_archive → sync_state → scan_local_files.
+
+    This is the critical test that catches cross-platform path bugs:
+    - process_archive() extracts files and stores paths in sync_state
+    - scan_local_files() scans the same directory
+    - If path formats don't match, purge detection breaks
+
+    On Windows, this test will fail if we regress to using str(path.relative_to())
+    instead of path.as_posix() in scan_extracted_files().
+    """
+
+    @pytest.fixture
+    def temp_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield Path(tmpdir)
+
+    def _create_test_archive(self, archive_path: Path, folder_structure: dict):
+        """Create a ZIP archive with nested folder structure."""
+        with zipfile.ZipFile(archive_path, 'w') as zf:
+            for rel_path, content in folder_structure.items():
+                if isinstance(content, bytes):
+                    zf.writestr(rel_path, content)
+                else:
+                    zf.writestr(rel_path, content)
+
+    def test_process_archive_paths_match_local_scan(self, temp_dir):
+        """
+        THE critical integration test: paths stored by process_archive must
+        match paths returned by scan_local_files for the same files.
+
+        This is the exact bug scenario - if process_archive stores backslash
+        paths on Windows but scan_local_files returns forward-slash paths,
+        the comparison fails and files get incorrectly flagged for purge.
+        """
+        from src.sync.downloader import FileDownloader, DownloadTask
+        from src.sync.state import SyncState
+        from src.sync.cache import scan_local_files
+
+        # Set up folder structure simulating a drive
+        drive_path = temp_dir / "TestDrive" / "Setlist"
+        drive_path.mkdir(parents=True)
+
+        # Create archive with nested structure
+        archive_path = drive_path / "_download_test_chart.zip"
+        self._create_test_archive(archive_path, {
+            "Chart Folder/song.ini": "[song]\nname=Test",
+            "Chart Folder/notes.mid": b"MThd",
+            "Chart Folder/Subfolder/extra.txt": "nested file",
+        })
+
+        # Set up sync_state
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+
+        # Create downloader and process the archive
+        downloader = FileDownloader(delete_videos=False)
+        task = DownloadTask(
+            file_id="test123",
+            local_path=archive_path,
+            size=archive_path.stat().st_size,
+            md5="abc123",
+            is_archive=True,
+            rel_path="TestDrive/Setlist/test_chart.zip"
+        )
+
+        success, error, extracted_files = downloader.process_archive(
+            task, sync_state, archive_rel_path="TestDrive/Setlist/test_chart.zip"
+        )
+
+        assert success, f"process_archive failed: {error}"
+
+        # Now scan the same directory with scan_local_files
+        local_files = scan_local_files(drive_path)
+
+        # Get paths stored in sync_state (under the drive prefix)
+        all_synced = sync_state.get_all_files()
+        synced_in_setlist = {
+            p.replace("TestDrive/Setlist/", "")
+            for p in all_synced
+            if p.startswith("TestDrive/Setlist/")
+        }
+
+        # THE CRITICAL ASSERTION: paths must match exactly
+        assert synced_in_setlist == set(local_files.keys()), (
+            f"Path mismatch between sync_state and local scan!\n"
+            f"sync_state paths: {sorted(synced_in_setlist)}\n"
+            f"local_files paths: {sorted(local_files.keys())}\n"
+            f"This indicates a cross-platform path separator bug."
+        )
+
+        # Verify no backslashes anywhere
+        for path in synced_in_setlist:
+            assert "\\" not in path, f"Backslash in sync_state: {path}"
+        for path in local_files.keys():
+            assert "\\" not in path, f"Backslash in local_files: {path}"
+
+    def test_process_archive_with_deep_nesting(self, temp_dir):
+        """Test with deeply nested paths - more likely to expose path issues."""
+        from src.sync.downloader import FileDownloader, DownloadTask
+        from src.sync.state import SyncState
+        from src.sync.cache import scan_local_files
+
+        drive_path = temp_dir / "TestDrive" / "Deep"
+        drive_path.mkdir(parents=True)
+
+        # Create archive with deep nesting
+        archive_path = drive_path / "_download_deep.zip"
+        self._create_test_archive(archive_path, {
+            "Level1/Level2/Level3/song.ini": "[song]",
+            "Level1/Level2/Level3/notes.mid": b"midi",
+            "Level1/Level2/other.txt": "file",
+            "Level1/root.txt": "root",
+        })
+
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+
+        downloader = FileDownloader(delete_videos=False)
+        task = DownloadTask(
+            file_id="deep",
+            local_path=archive_path,
+            size=archive_path.stat().st_size,
+            md5="deep123",
+            is_archive=True,
+            rel_path="TestDrive/Deep/deep.zip"
+        )
+
+        success, error, _ = downloader.process_archive(
+            task, sync_state, archive_rel_path="TestDrive/Deep/deep.zip"
+        )
+
+        assert success, f"Deep nesting extraction failed: {error}"
+
+        # Compare paths
+        local_files = scan_local_files(drive_path)
+        all_synced = sync_state.get_all_files()
+        synced_here = {
+            p.replace("TestDrive/Deep/", "")
+            for p in all_synced
+            if p.startswith("TestDrive/Deep/")
+        }
+
+        assert synced_here == set(local_files.keys()), (
+            f"Deep nesting path mismatch!\n"
+            f"sync_state: {sorted(synced_here)}\n"
+            f"local: {sorted(local_files.keys())}"
+        )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

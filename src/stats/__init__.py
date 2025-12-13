@@ -62,7 +62,7 @@ def get_best_stats(
 
     Chart count priority (highest to lowest):
     1. Local disk scan (if folder exists and has extracted content)
-    2. Admin override (for nested archives like Guitar Hero game rips)
+    2. Admin override (for nested archives like game rips)
     3. Manifest data (fallback)
 
     Size priority:
@@ -70,8 +70,8 @@ def get_best_stats(
     2. Manifest data (archive/download size) - overrides don't affect size
 
     Args:
-        folder_name: Name of the drive folder (e.g., "Guitar Hero")
-        setlist_name: Name of the setlist (e.g., "(2008) Guitar Hero World Tour")
+        folder_name: Name of the drive folder
+        setlist_name: Name of the setlist
         manifest_charts: Chart count from manifest
         manifest_size: Total size from manifest
         local_path: Path to the local download folder (or None if not downloaded)

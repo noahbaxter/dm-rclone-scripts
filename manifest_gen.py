@@ -22,20 +22,12 @@ if env_path.exists():
                 key, value = line.split("=", 1)
                 os.environ.setdefault(key.strip(), value.strip())
 
-from src import (
-    DriveClient,
-    Manifest,
-    FolderScanner,
-    OAuthManager,
-    ChangeTracker,
-    DrivesConfig,
-    format_size,
-    format_duration,
-    print_progress,
-)
+from src.drive import DriveClient, FolderScanner, OAuthManager, ChangeTracker
 from src.drive.client import DriveClientConfig
-from src.manifest import FolderEntry
-from src.charts import count_charts_in_files
+from src.manifest import Manifest, FolderEntry, count_charts_in_files
+from src.config import DrivesConfig
+from src.core.formatting import format_size, format_duration
+from src.ui.primitives import print_progress
 
 # ============================================================================
 # Configuration

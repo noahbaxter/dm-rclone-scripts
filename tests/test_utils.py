@@ -4,15 +4,24 @@ Tests for utility functions.
 
 import pytest
 
-from src.utils import sanitize_filename, sanitize_path, dedupe_files_by_newest
+from src.core.formatting import (
+    sanitize_filename,
+    sanitize_path,
+    dedupe_files_by_newest,
+    format_size,
+    format_duration,
+    to_posix,
+    relative_posix,
+    parent_posix,
+)
 
 
 class TestSanitizeFilename:
     """Tests for sanitize_filename() - cross-platform filename safety."""
 
     def test_colon_becomes_space_dash(self):
-        """Colon → ' -' (common in game titles like 'Guitar Hero: Aerosmith')."""
-        assert sanitize_filename("Guitar Hero: Aerosmith") == "Guitar Hero - Aerosmith"
+        """Colon → ' -' (common in titles with subtitles)."""
+        assert sanitize_filename("Title: Subtitle") == "Title - Subtitle"
 
     def test_question_mark_removed(self):
         """Question mark removed entirely."""
@@ -87,11 +96,11 @@ class TestSanitizePath:
 
     def test_single_component(self):
         """Single path component (no slashes)."""
-        assert sanitize_path("Guitar Hero: Aerosmith") == "Guitar Hero - Aerosmith"
+        assert sanitize_path("Title: Subtitle") == "Title - Subtitle"
 
     def test_multi_component(self):
         """Multiple path components each sanitized independently."""
-        assert sanitize_path("Guitar Hero: Aerosmith/song.zip") == "Guitar Hero - Aerosmith/song.zip"
+        assert sanitize_path("Title: Subtitle/song.zip") == "Title - Subtitle/song.zip"
 
     def test_deeply_nested(self):
         """Deeply nested paths."""
@@ -142,8 +151,8 @@ class TestDedupeFilesByNewest:
     def test_colon_treated_as_duplicate(self):
         """Paths differing only by colon (sanitized to ' -') are duplicates."""
         files = [
-            {"path": "Guitar Hero: Aerosmith/song.zip", "modified": "2023-01-01T00:00:00Z"},
-            {"path": "Guitar Hero - Aerosmith/song.zip", "modified": "2022-01-01T00:00:00Z"},
+            {"path": "Title: Subtitle/song.zip", "modified": "2023-01-01T00:00:00Z"},
+            {"path": "Title - Subtitle/song.zip", "modified": "2022-01-01T00:00:00Z"},
         ]
         result = dedupe_files_by_newest(files)
         assert len(result) == 1
@@ -160,6 +169,149 @@ class TestDedupeFilesByNewest:
     def test_empty_list_returns_empty(self):
         """Empty input returns empty output."""
         assert dedupe_files_by_newest([]) == []
+
+
+class TestFormatSize:
+    """Tests for format_size() - human readable byte sizes."""
+
+    def test_bytes(self):
+        """Small values shown in bytes."""
+        assert format_size(0) == "0.0 B"
+        assert format_size(500) == "500.0 B"
+        assert format_size(1023) == "1023.0 B"
+
+    def test_kilobytes(self):
+        """KB range."""
+        assert format_size(1024) == "1.0 KB"
+        assert format_size(1536) == "1.5 KB"
+        assert format_size(1024 * 500) == "500.0 KB"
+
+    def test_megabytes(self):
+        """MB range."""
+        assert format_size(1024 * 1024) == "1.0 MB"
+        assert format_size(1024 * 1024 * 50) == "50.0 MB"
+
+    def test_gigabytes(self):
+        """GB range."""
+        assert format_size(1024 * 1024 * 1024) == "1.0 GB"
+        assert format_size(1024 * 1024 * 1024 * 2.5) == "2.5 GB"
+
+    def test_terabytes(self):
+        """TB range."""
+        assert format_size(1024 * 1024 * 1024 * 1024) == "1.0 TB"
+
+
+class TestFormatDuration:
+    """Tests for format_duration() - human readable time durations."""
+
+    def test_seconds_only(self):
+        """Durations under 60s shown in seconds."""
+        assert format_duration(0) == "0.0s"
+        assert format_duration(45) == "45.0s"
+        assert format_duration(59.9) == "59.9s"
+
+    def test_minutes_and_seconds(self):
+        """Durations under 1 hour shown in minutes and seconds."""
+        assert format_duration(60) == "1m 0s"
+        assert format_duration(90) == "1m 30s"
+        assert format_duration(125) == "2m 5s"
+        assert format_duration(3599) == "59m 59s"
+
+    def test_hours_and_minutes(self):
+        """Durations 1 hour+ shown in hours and minutes."""
+        assert format_duration(3600) == "1h 0m"
+        assert format_duration(3660) == "1h 1m"
+        assert format_duration(7200) == "2h 0m"
+        assert format_duration(5400) == "1h 30m"
+
+
+class TestCrossPlatformPaths:
+    """
+    Tests for cross-platform path utilities.
+
+    These ensure consistent forward-slash paths regardless of OS.
+    Critical for sync_state.json where paths must match across platforms.
+    """
+
+    def test_to_posix_normalizes_backslashes(self):
+        """to_posix converts backslashes to forward slashes."""
+        assert to_posix("folder\\sub\\file.txt") == "folder/sub/file.txt"
+        assert to_posix("a\\b/c\\d") == "a/b/c/d"  # Mixed
+
+    def test_relative_posix_with_real_paths(self, tmp_path):
+        """relative_posix produces forward slashes from real filesystem paths."""
+        nested = tmp_path / "a" / "b" / "c"
+        nested.mkdir(parents=True)
+        test_file = nested / "file.txt"
+        test_file.touch()
+
+        result = relative_posix(test_file, tmp_path)
+        assert result == "a/b/c/file.txt"
+        assert "\\" not in result
+
+    def test_parent_posix_extracts_parent(self):
+        """parent_posix returns parent with forward slashes."""
+        assert parent_posix("a/b/c/file.txt") == "a/b/c"
+        assert parent_posix("file.txt") == "."
+
+    # --- Integration: actual function compatibility ---
+
+    def test_scan_functions_produce_compatible_paths(self, tmp_path):
+        """
+        THE critical integration test: scan_extracted_files and scan_local_files
+        must produce identical path keys for the same files.
+
+        This is the actual bug we fixed - if scan_extracted_files used
+        str(path.relative_to()) instead of relative_posix(), it would produce
+        backslash paths on Windows that wouldn't match scan_local_files output.
+        """
+        from src.sync.extractor import scan_extracted_files
+        from src.sync.cache import scan_local_files
+
+        # Create nested structure like an extracted archive
+        chart_folder = tmp_path / "Setlist" / "Chart Name" / "Subfolder"
+        chart_folder.mkdir(parents=True)
+        (chart_folder / "song.ini").write_text("[song]")
+        (chart_folder / "notes.mid").write_bytes(b"midi data")
+        (chart_folder.parent / "album.png").write_bytes(b"image")
+
+        # Scan with both functions
+        extracted_paths = set(scan_extracted_files(tmp_path, tmp_path).keys())
+        local_paths = set(scan_local_files(tmp_path).keys())
+
+        # They MUST produce identical path sets
+        assert extracted_paths == local_paths, (
+            f"Path mismatch!\n"
+            f"scan_extracted_files: {sorted(extracted_paths)}\n"
+            f"scan_local_files: {sorted(local_paths)}"
+        )
+
+        # Double-check no backslashes snuck in
+        for path in extracted_paths:
+            assert "\\" not in path, f"Backslash in extracted path: {path}"
+        for path in local_paths:
+            assert "\\" not in path, f"Backslash in local path: {path}"
+
+    def test_parent_grouping_consistent(self):
+        """
+        Simulates purge_planner grouping files by parent folder.
+        Parent paths must be consistent for proper chart counting.
+        """
+        files = [
+            "Setlist/ChartA/song.ini",
+            "Setlist/ChartA/notes.mid",
+            "Setlist/ChartB/song.ini",
+            "Setlist/ChartB/notes.mid",
+        ]
+
+        # Group by parent (simulates chart counting)
+        parents = set()
+        for f in files:
+            parents.add(parent_posix(f))
+
+        assert len(parents) == 2
+        assert "Setlist/ChartA" in parents
+        assert "Setlist/ChartB" in parents
 
 
 if __name__ == "__main__":
