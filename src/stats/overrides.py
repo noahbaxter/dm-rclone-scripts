@@ -98,7 +98,7 @@ class ManifestOverrides:
         Get overrides for a folder by name.
 
         Args:
-            folder_name: Name of the drive folder (e.g., "Guitar Hero")
+            folder_name: Name of the drive folder
 
         Returns:
             FolderOverride if exists, None otherwise
@@ -173,7 +173,7 @@ def get_overrides(path: Optional[Path] = None) -> ManifestOverrides:
     if _default_overrides is None:
         if path is None:
             # Try default locations: bundle dir (PyInstaller) or source dir
-            from ..paths import get_bundle_dir
+            from ..core.paths import get_bundle_dir
             default_path = get_bundle_dir() / "manifest_overrides.json"
             path = default_path if default_path.exists() else None
         _default_overrides = ManifestOverrides.load(path) if path else ManifestOverrides()

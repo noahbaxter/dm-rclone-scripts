@@ -51,7 +51,7 @@ jobs:
           pip install pytest
 
       - name: Run tests
-        run: pytest tests/ -v
+        run: pytest tests/ -v -m "not stress"
 
   build:
     needs: test

@@ -7,17 +7,17 @@ from _helpers import REPO_ROOT, fetch_manifest, find_folder_in_manifest, load_se
 
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.utils import format_size
-from src.constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS
+from src.core.formatting import format_size
+from src.core.constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS
 from src.ui.screens import extract_subfolders_from_manifest
-from src.sync.operations import count_purgeable_files
+from src.sync import count_purgeable_files
 from src.stats import get_best_stats
 
 
 def main():
     if len(sys.argv) < 2:
         print("Usage: python scripts/setlist_debug.py <path_to_drive_folder>")
-        print("Example: python scripts/setlist_debug.py '/path/to/Sync Charts/Guitar Hero'")
+        print("Example: python scripts/setlist_debug.py '/path/to/Sync Charts/DriveName'")
         return 1
 
     path = Path(sys.argv[1])
@@ -70,8 +70,8 @@ def main():
     # Call actual count_purgeable_files function
     print(f"\nACTUAL count_purgeable_files RESULT:")
     print("-" * 70)
-    purgeable_count, purgeable_size = count_purgeable_files([folder], path.parent, settings)
-    print(f"  {purgeable_count} files, {format_size(purgeable_size)}")
+    purgeable_count, purgeable_size, purgeable_charts = count_purgeable_files([folder], path.parent, settings)
+    print(f"  {purgeable_count} files ({purgeable_charts} charts), {format_size(purgeable_size)}")
 
     # Show per-setlist breakdown
     print(f"\nPER-SETLIST BREAKDOWN (disabled only):")

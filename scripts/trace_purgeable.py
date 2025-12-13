@@ -7,14 +7,14 @@ from _helpers import REPO_ROOT, fetch_manifest, find_folder_in_manifest, load_se
 
 sys.path.insert(0, str(REPO_ROOT))
 
-from src.utils import format_size
-from src.sync.operations import (
-    count_purgeable_detailed,
-    _scan_local_files,
-    _scan_actual_charts,
-    find_extra_files,
-    find_partial_downloads,
-)
+from src.core.formatting import format_size
+from src.sync import count_purgeable_detailed
+from src.sync.cache import scan_local_files, scan_actual_charts
+from src.sync.purge_planner import find_extra_files, find_partial_downloads
+
+# Backwards compat
+_scan_local_files = scan_local_files
+_scan_actual_charts = scan_actual_charts
 from src.stats import get_best_stats
 
 
