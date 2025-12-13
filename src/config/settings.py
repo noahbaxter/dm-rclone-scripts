@@ -35,6 +35,8 @@ class UserSettings:
         self.delete_videos: bool = True
         # Whether user has been prompted to sign in to Google
         self.oauth_prompted: bool = False
+        # Delta display mode: "size", "files", or "charts"
+        self.delta_mode: str = "size"
         # Track if this is a fresh settings file (no file existed)
         self._is_new: bool = False
 
@@ -53,6 +55,7 @@ class UserSettings:
                 settings.group_expanded = data.get("group_expanded", {})
                 settings.delete_videos = data.get("delete_videos", True)
                 settings.oauth_prompted = data.get("oauth_prompted", False)
+                settings.delta_mode = data.get("delta_mode", "size")
             except (json.JSONDecodeError, IOError):
                 settings._is_new = True
         else:
@@ -68,9 +71,17 @@ class UserSettings:
             "group_expanded": self.group_expanded,
             "delete_videos": self.delete_videos,
             "oauth_prompted": self.oauth_prompted,
+            "delta_mode": self.delta_mode,
         }
         with open(self.path, "w") as f:
             json.dump(data, f, indent=2)
+
+    def cycle_delta_mode(self) -> str:
+        """Cycle through delta display modes. Returns new mode."""
+        modes = ["size", "files", "charts"]
+        current_idx = modes.index(self.delta_mode) if self.delta_mode in modes else 0
+        self.delta_mode = modes[(current_idx + 1) % len(modes)]
+        return self.delta_mode
 
     def is_drive_enabled(self, drive_id: str) -> bool:
         """Check if a drive is enabled at the top level.

@@ -624,6 +624,13 @@ class SyncApp:
                 self.handle_toggle_group(value)
                 # Keep using the same cache - just showing/hiding items
 
+            elif action == "cycle_delta_mode":
+                # Tab - cycle between size/files display mode
+                self.user_settings.cycle_delta_mode()
+                self.user_settings.save()
+                self.folder_stats_cache.invalidate_all()  # Clear cached display strings
+                menu_cache = None  # Invalidate cache to refresh display
+
             elif action == "signin":
                 self.handle_signin()
                 # No cache invalidation needed - just auth state changed

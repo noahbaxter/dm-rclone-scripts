@@ -23,6 +23,7 @@ from ..primitives import (
     KEY_ENTER,
     KEY_ESC,
     KEY_SPACE,
+    KEY_TAB,
 )
 from ..components import (
     box_row,
@@ -206,18 +207,8 @@ class Menu:
         return [i for i, item in enumerate(self.items) if isinstance(item, (MenuItem, MenuAction, MenuGroupHeader))]
 
     def _width(self) -> int:
-        w = 40
-        if self.title:
-            w = max(w, len(self.title) + 8)
-        if self.subtitle:
-            w = max(w, len(self.subtitle) + 8)
-        for item in self.items:
-            if isinstance(item, (MenuItem, MenuAction)):
-                length = len(item.label) + (len(item.description) + 3 if item.description else 0) + 8
-                w = max(w, length)
-            elif isinstance(item, MenuGroupHeader):
-                w = max(w, len(item.label) + 10)
-        return min(w + 4, shutil.get_terminal_size().columns - 2)
+        """Return menu width based on terminal size."""
+        return shutil.get_terminal_size().columns - 2
 
     def _render_item(self, orig_idx: int, item: Any, w: int, c: str):
         """Render a single menu item."""
@@ -263,19 +254,19 @@ class Menu:
                     hotkey = f"{Colors.DIM_HOVER}[{item.hotkey}]{Colors.RESET} " if item.hotkey else ""
                     label = f"{Colors.DIM_HOVER}{label_text}{Colors.RESET}"
                     if item.description:
-                        label += f" {Colors.MUTED_DIM}({item.description}){Colors.RESET}"
+                        label += f" {Colors.MUTED_DIM}{item.description}{Colors.RESET}"
                     content = f"{Colors.PINK}▸{Colors.RESET} {toggle_prefix}{hotkey}{label}"
                 else:
                     hotkey = f"{Colors.DIM}[{item.hotkey}]{Colors.RESET} " if item.hotkey else ""
                     label = f"{Colors.DIM}{label_text}{Colors.RESET}"
                     if item.description:
-                        label += f" {Colors.MUTED_DIM}({item.description}){Colors.RESET}"
+                        label += f" {Colors.MUTED_DIM}{item.description}{Colors.RESET}"
                     content = f"  {toggle_prefix}{hotkey}{label}"
             else:
                 hotkey = f"{Colors.HOTKEY}[{item.hotkey}]{Colors.RESET} " if item.hotkey else ""
                 label = label_text
                 if item.description:
-                    label += f" {Colors.MUTED}({item.description}){Colors.RESET}"
+                    label += f" {Colors.MUTED}{item.description}{Colors.RESET}"
                 if selected:
                     content = f"{Colors.PINK}▸{Colors.RESET} {toggle_prefix}{hotkey}{Colors.BOLD}{label}{Colors.RESET}"
                 else:
@@ -430,6 +421,9 @@ class Menu:
 
                 elif key == KEY_SPACE:
                     return MenuResult(self.items[self._selected], "space")
+
+                elif key == KEY_TAB:
+                    return MenuResult(self.items[self._selected], "tab")
 
                 elif key == KEY_LEFT or key == KEY_RIGHT:
                     current_item = self.items[self._selected]
