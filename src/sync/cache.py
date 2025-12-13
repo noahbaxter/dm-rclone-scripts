@@ -6,9 +6,47 @@ Cache is invalidated after downloads/purges.
 """
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..stats import clear_local_stats_cache
+
+if TYPE_CHECKING:
+    from .status import SyncStatus
+
+
+@dataclass
+class FolderStats:
+    """Cached stats for a single folder."""
+    folder_id: str
+    sync_status: "SyncStatus"
+    purge_count: int
+    purge_size: int
+    display_string: str | None
+
+
+class FolderStatsCache:
+    """Per-folder stats cache with selective invalidation."""
+
+    def __init__(self):
+        self._cache: dict[str, FolderStats] = {}
+
+    def invalidate(self, folder_id: str):
+        """Invalidate one folder's stats."""
+        self._cache.pop(folder_id, None)
+
+    def invalidate_all(self):
+        """Full invalidation (after sync/purge)."""
+        self._cache.clear()
+
+    def get(self, folder_id: str) -> FolderStats | None:
+        """Get cached stats for a folder, or None if not cached."""
+        return self._cache.get(folder_id)
+
+    def set(self, folder_id: str, stats: FolderStats):
+        """Store stats for a folder."""
+        self._cache[folder_id] = stats
 
 
 class SyncCache:

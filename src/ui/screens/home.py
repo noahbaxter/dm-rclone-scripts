@@ -4,14 +4,13 @@ Home screen - main menu of the application.
 Shows available chart packs, sync status, and navigation options.
 """
 
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.core.formatting import format_size
 from src.config import UserSettings, DrivesConfig, extract_subfolders_from_manifest
-from src.sync import get_sync_status, count_purgeable_files, SyncStatus
+from src.sync import get_sync_status, count_purgeable_files, SyncStatus, FolderStats, FolderStatsCache
 from src.sync.state import SyncState
 from ..primitives import Colors
 from ..components import format_colored_count, format_colored_size, format_sync_subtitle
@@ -30,14 +29,61 @@ class MainMenuCache:
     group_enabled_counts: dict = field(default_factory=dict)
 
 
+def _compute_folder_stats(
+    folder: dict,
+    download_path: Path,
+    user_settings: UserSettings,
+    sync_state: SyncState,
+) -> FolderStats:
+    """Compute stats for a single folder (sync status, purge counts, display string)."""
+    folder_id = folder.get("folder_id", "")
+    is_custom = folder.get("is_custom", False)
+
+    status = get_sync_status([folder], download_path, user_settings, sync_state)
+    purge_count, purge_size = count_purgeable_files([folder], download_path, user_settings, sync_state)
+
+    # Build display string
+    stats_parts = []
+    if status.total_charts or purge_count:
+        if is_custom and not status.is_actual_charts:
+            unit = "archives"
+        else:
+            unit = "charts"
+        stats_parts.append(f"{format_colored_count(status.synced_charts, status.total_charts, excess=purge_count)} {unit}")
+
+    setlists = extract_subfolders_from_manifest(folder)
+    if setlists and user_settings:
+        enabled_setlists = [
+            c for c in setlists
+            if user_settings.is_subfolder_enabled(folder_id, c)
+        ]
+        stats_parts.append(f"{len(enabled_setlists)}/{len(setlists)} setlists")
+
+    stats_parts.append(format_colored_size(status.synced_size, status.total_size, excess_size=purge_size))
+
+    display_string = ", ".join(stats_parts) if stats_parts else None
+
+    return FolderStats(
+        folder_id=folder_id,
+        sync_status=status,
+        purge_count=purge_count,
+        purge_size=purge_size,
+        display_string=display_string,
+    )
+
+
 def compute_main_menu_cache(
     folders: list,
     user_settings: UserSettings,
     download_path: Path,
     drives_config: DrivesConfig,
-    sync_state: SyncState = None
+    sync_state: SyncState = None,
+    folder_stats_cache: FolderStatsCache = None
 ) -> MainMenuCache:
-    """Compute all expensive stats for the main menu."""
+    """Compute all expensive stats for the main menu.
+
+    Uses folder_stats_cache if provided to avoid recalculating unchanged folders.
+    """
     cache = MainMenuCache()
 
     if not download_path or not folders:
@@ -47,13 +93,8 @@ def compute_main_menu_cache(
     global_purge_count = 0
     global_purge_size = 0
 
-    cache_start = time.time()
-
     for folder in folders:
         folder_id = folder.get("folder_id", "")
-        folder_name = folder.get("name", "")
-        stats_parts = []
-
         is_custom = folder.get("is_custom", False)
         has_files = bool(folder.get("files"))
 
@@ -61,15 +102,22 @@ def compute_main_menu_cache(
             cache.folder_stats[folder_id] = "not yet scanned"
             continue
 
-        folder_start = time.time()
+        # Try to use cached stats for this folder
+        cached = folder_stats_cache.get(folder_id) if folder_stats_cache else None
 
-        status = get_sync_status([folder], download_path, user_settings, sync_state)
-        folder_purge_count, folder_purge_size = count_purgeable_files([folder], download_path, user_settings, sync_state)
+        if cached:
+            stats = cached
+        else:
+            stats = _compute_folder_stats(folder, download_path, user_settings, sync_state)
+            if folder_stats_cache:
+                folder_stats_cache.set(folder_id, stats)
 
-        folder_time = time.time() - folder_start
-        if folder_time > 1.0:
-            print(f"  [perf] {folder_name}: {folder_time:.1f}s")
+        status = stats.sync_status
+        folder_purge_count = stats.purge_count
+        folder_purge_size = stats.purge_size
+        display_string = stats.display_string
 
+        # Aggregate into global stats
         global_status.total_charts += status.total_charts
         global_status.synced_charts += status.synced_charts
         global_status.total_size += status.total_size
@@ -79,24 +127,7 @@ def compute_main_menu_cache(
         global_purge_count += folder_purge_count
         global_purge_size += folder_purge_size
 
-        if status.total_charts or folder_purge_count:
-            if is_custom and not status.is_actual_charts:
-                unit = "archives"
-            else:
-                unit = "charts"
-            stats_parts.append(f"{format_colored_count(status.synced_charts, status.total_charts, excess=folder_purge_count)} {unit}")
-
-        setlists = extract_subfolders_from_manifest(folder)
-        if setlists and user_settings:
-            enabled_setlists = [
-                c for c in setlists
-                if user_settings.is_subfolder_enabled(folder_id, c)
-            ]
-            stats_parts.append(f"{len(enabled_setlists)}/{len(setlists)} setlists")
-
-        stats_parts.append(format_colored_size(status.synced_size, status.total_size, excess_size=folder_purge_size))
-
-        cache.folder_stats[folder_id] = ", ".join(stats_parts) if stats_parts else None
+        cache.folder_stats[folder_id] = display_string
 
     cache.subtitle = format_sync_subtitle(
         global_status,
@@ -115,10 +146,6 @@ def compute_main_menu_cache(
                 if (user_settings.is_drive_enabled(d.folder_id) if user_settings else True)
             )
             cache.group_enabled_counts[group_name] = enabled_count
-
-    total_time = time.time() - cache_start
-    if total_time > 2.0:
-        print(f"  [perf] Menu cache computed in {total_time:.1f}s")
 
     return cache
 

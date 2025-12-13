@@ -9,7 +9,6 @@ manifest, eliminating the need for users to scan Google Drive.
 import argparse
 import os
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -39,10 +38,10 @@ from src.ui import (
     Colors,
     compute_main_menu_cache,
 )
+from src.sync import FolderStatsCache, count_purgeable_detailed, clear_scan_cache
 from src.ui.primitives import clear_screen, wait_with_skip
 from src.ui.primitives.terminal import set_terminal_size
 from src.core.logging import TeeOutput
-from src.sync import count_purgeable_detailed, clear_scan_cache
 from src.drive.client import DriveClientConfig
 
 # ============================================================================
@@ -94,6 +93,7 @@ class SyncApp:
         )
         self.folders = []
         self.use_local_manifest = use_local_manifest
+        self.folder_stats_cache = FolderStatsCache()
 
     def load_manifest(self, quiet: bool = False):
         """Load manifest folders (includes custom folders)."""
@@ -102,11 +102,7 @@ class SyncApp:
                 print("Loading local manifest...")
             else:
                 print("Fetching folder list...")
-        fetch_start = time.time()
         manifest_data = fetch_manifest(use_local=self.use_local_manifest)
-        fetch_time = time.time() - fetch_start
-        if fetch_time > 2.0 and not quiet:
-            print(f"  [perf] Manifest fetched in {fetch_time:.1f}s")
 
         # Filter out hidden drives
         hidden_ids = {d.folder_id for d in self.drives_config.drives if d.hidden}
@@ -157,6 +153,7 @@ class SyncApp:
         # Step 1: Download missing files
         self.sync.download_folders(self.folders, enabled_indices, get_download_path(), disabled_map)
         clear_scan_cache()  # Invalidate filesystem cache after download
+        self.folder_stats_cache.invalidate_all()  # Invalidate all folder stats
 
         # Step 2: Purge extra files (no confirmation - sync means make it match)
         stats = count_purgeable_detailed(
@@ -182,6 +179,7 @@ class SyncApp:
 
             purge_all_folders(self.folders, get_download_path(), self.user_settings, self.sync_state)
             clear_scan_cache()  # Invalidate filesystem cache after purge
+            self.folder_stats_cache.invalidate_all()  # Invalidate all folder stats
 
             print("Cleanup complete.")
         else:
@@ -195,6 +193,9 @@ class SyncApp:
 
         # Show subfolder settings (works for both regular and custom folders)
         result = show_subfolder_settings(folder, self.user_settings, get_download_path(), self.sync_state)
+
+        # Invalidate this folder's stats (setlists may have changed)
+        self.folder_stats_cache.invalidate(folder_id)
 
         # Handle custom folder actions
         if result == "scan":
@@ -329,6 +330,8 @@ class SyncApp:
         """Toggle a drive on/off at the top level (preserves setlist settings)."""
         self.user_settings.toggle_drive(folder_id)
         self.user_settings.save()
+        # Only invalidate this folder's stats
+        self.folder_stats_cache.invalidate(folder_id)
 
     def handle_toggle_group(self, group_name: str):
         """Toggle a group expanded/collapsed."""
@@ -587,7 +590,7 @@ class SyncApp:
                 menu_cache = compute_main_menu_cache(
                     self.folders, self.user_settings,
                     get_download_path(), combined_drives,
-                    self.sync_state
+                    self.sync_state, self.folder_stats_cache
                 )
 
             action, value, menu_pos = show_main_menu(

@@ -139,13 +139,6 @@ def plan_purge(
         if not folder_path.exists():
             continue
 
-        # Count partial downloads within this folder BEFORE checking drive enabled
-        partial_files = find_partial_downloads(folder_path)
-        if partial_files:
-            stats.partial_count += len(partial_files)
-            stats.partial_size += sum(size for _, size in partial_files)
-            all_files.extend(partial_files)
-
         # Use cached local file scan
         local_files = scan_local_files(folder_path)
         if not local_files:
@@ -154,12 +147,19 @@ def plan_purge(
         drive_enabled = user_settings.is_drive_enabled(folder_id) if user_settings else True
 
         if not drive_enabled:
-            # Drive is disabled - count ALL local files as "charts"
+            # Drive is disabled - count ALL local files as "charts" (includes partials)
             for rel_path, size in local_files.items():
                 stats.chart_count += 1
                 stats.chart_size += size
                 all_files.append((folder_path / rel_path, size))
             continue
+
+        # Only scan for partial downloads on ENABLED drives (rglob is expensive)
+        partial_files = find_partial_downloads(folder_path)
+        if partial_files:
+            stats.partial_count += len(partial_files)
+            stats.partial_size += sum(size for _, size in partial_files)
+            all_files.extend(partial_files)
 
         # Drive is enabled - count files in disabled setlists + extra files separately
         disabled_setlist_paths = set()
