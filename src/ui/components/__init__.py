@@ -21,9 +21,12 @@ from .header import (
 )
 from .formatting import (
     strip_ansi,
-    format_colored_count,
-    format_colored_size,
-    format_sync_subtitle,
+    calc_percent,
+    format_delta,
+    format_status_line,
+    format_home_item,
+    format_setlist_item,
+    format_drive_status,
     format_purge_tree,
 )
 
@@ -43,8 +46,11 @@ __all__ = [
     "print_header",
     # Formatting
     "strip_ansi",
-    "format_colored_count",
-    "format_colored_size",
-    "format_sync_subtitle",
+    "calc_percent",
+    "format_delta",
+    "format_status_line",
+    "format_home_item",
+    "format_setlist_item",
+    "format_drive_status",
     "format_purge_tree",
 ]

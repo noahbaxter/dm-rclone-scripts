@@ -32,9 +32,12 @@ from .primitives import (
 from .components import (
     print_header,
     strip_ansi,
-    format_colored_count,
-    format_colored_size,
-    format_sync_subtitle,
+    calc_percent,
+    format_delta,
+    format_status_line,
+    format_home_item,
+    format_setlist_item,
+    format_drive_status,
     format_purge_tree,
 )
 from .widgets import (
@@ -85,9 +88,12 @@ __all__ = [
     # Components
     "print_header",
     "strip_ansi",
-    "format_colored_count",
-    "format_colored_size",
-    "format_sync_subtitle",
+    "calc_percent",
+    "format_delta",
+    "format_status_line",
+    "format_home_item",
+    "format_setlist_item",
+    "format_drive_status",
     "format_purge_tree",
     # Widgets
     "Menu",

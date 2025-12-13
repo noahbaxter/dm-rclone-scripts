@@ -4,16 +4,13 @@ Text formatting helpers for UI display.
 Functions for formatting sync status, counts, sizes with colors.
 """
 
+import math
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from src.core.formatting import format_size
 from ..primitives import Colors
-
-if TYPE_CHECKING:
-    from src.sync import SyncStatus
 
 
 def strip_ansi(text: str) -> str:
@@ -21,103 +18,350 @@ def strip_ansi(text: str) -> str:
     return re.sub(r'\x1b\[[0-9;]*m', '', text)
 
 
-def format_colored_count(
-    synced: int,
-    total: int,
-    excess: int = 0,
-    synced_is_excess: bool = False
+def calc_percent(synced: int, total: int) -> int:
+    """Calculate sync percentage, always rounding down."""
+    if total == 0:
+        return 100
+    return math.floor(synced / total * 100)
+
+
+def format_delta(
+    add_size: int = 0,
+    add_files: int = 0,
+    add_charts: int = 0,
+    remove_size: int = 0,
+    remove_files: int = 0,
+    remove_charts: int = 0,
+    mode: str = "size",
+    empty_text: str = "",
 ) -> str:
     """
-    Format a colored count display.
+    Format add/remove delta with combined brackets.
 
-    Args:
-        synced: Number of synced items
-        total: Total number of items
-        excess: Number of excess items (shown in red prefix)
-        synced_is_excess: If True, show synced in red (for disabled items with content)
+    Modes:
+        "size": [+2.3 GB / -317.3 MB]
+        "files": [+50 files / -80 files]
+        "charts": [+50 charts / -80 charts]
 
-    Returns:
-        Formatted string like "20 + 108/108" with colors (caller adds unit if needed)
-        Or just "45" in red if total is 0 but excess > 0
+    Bracket colors:
+        Add only: white [...]
+        Remove only: red [...]
+        Both: white [ + white add + / + red remove + red ]
     """
-    m = Colors.MUTED
+    if mode == "size":
+        has_add = add_size > 0
+        has_remove = remove_size > 0
+        add_str = f"+{format_size(add_size)}" if has_add else ""
+        remove_str = f"-{format_size(remove_size)}" if has_remove else ""
+    elif mode == "charts":
+        has_add = add_charts > 0
+        has_remove = remove_charts > 0
+        unit = "chart" if add_charts == 1 else "charts"
+        add_str = f"+{add_charts} {unit}" if has_add else ""
+        unit = "chart" if remove_charts == 1 else "charts"
+        remove_str = f"-{remove_charts} {unit}" if has_remove else ""
+    else:  # files
+        has_add = add_files > 0
+        has_remove = remove_files > 0
+        unit = "file" if add_files == 1 else "files"
+        add_str = f"+{add_files} {unit}" if has_add else ""
+        unit = "file" if remove_files == 1 else "files"
+        remove_str = f"-{remove_files} {unit}" if has_remove else ""
 
-    if excess > 0:
-        if total == 0:
-            return f"{Colors.RED}{excess}"
-        return f"{Colors.RED}{excess}{m} + {Colors.RESET}{synced}{m}/{total}"
-    elif synced_is_excess and synced > 0:
-        return f"{Colors.RED}{synced}{m}/{total}"
-    elif synced > 0:
-        return f"{Colors.RESET}{synced}{m}/{total}"
+    if has_add and has_remove:
+        # White [ and add, muted /, red remove and ]
+        return f"{Colors.RESET}{Colors.BOLD}[{add_str} {Colors.MUTED}/{Colors.RESET} {Colors.RED}{remove_str}]{Colors.RESET}"
+    elif has_add:
+        # All white
+        return f"{Colors.RESET}{Colors.BOLD}[{add_str}]{Colors.RESET}"
+    elif has_remove:
+        # All red
+        return f"{Colors.RED}[{remove_str}]{Colors.RESET}"
     else:
-        return f"{synced}/{total}"
+        return empty_text
 
 
-def format_colored_size(
-    synced_size: int,
+def format_status_line(
+    synced_charts: int,
+    total_charts: int,
+    enabled_setlists: int,
+    total_setlists: int,
     total_size: int,
-    excess_size: int = 0,
-    synced_is_excess: bool = False
+    synced_size: int = 0,
+    missing_charts: int = 0,
+    purgeable_files: int = 0,
+    purgeable_charts: int = 0,
+    purgeable_size: int = 0,
+    delta_mode: str = "size",
 ) -> str:
     """
-    Format a colored size display.
+    Format status line: 100% | 562/562 charts, 10/15 setlists (4.0 GB)
 
-    Args:
-        synced_size: Size of synced data
-        total_size: Total size
-        excess_size: Size of excess data (shown in red prefix)
-        synced_is_excess: If True, show synced_size in red (for disabled items with content)
-
-    Returns:
-        Formatted string like "1.6 GB + 4.2 GB/4.2 GB" with colors
-        Or just "1.5 GB" in red if total_size is 0 but excess_size > 0
+    With delta: 100% | 562/562 charts, 10/15 setlists (4.0 GB) [+50 charts / -80 charts]
     """
-    m = Colors.MUTED
-
-    if excess_size > 0:
-        if total_size == 0:
-            return f"{Colors.RED}{format_size(excess_size)}"
-        return f"{Colors.RED}{format_size(excess_size)}{m} + {Colors.RESET}{format_size(synced_size)}{m}/{format_size(total_size)}"
-    elif synced_is_excess and synced_size > 0:
-        effective_total = total_size if total_size > 0 else synced_size
-        return f"{Colors.RED}{format_size(synced_size)}{m}/{format_size(effective_total)}"
-    elif synced_size > 0:
-        effective_total = total_size if total_size > 0 else synced_size
-        return f"{Colors.RESET}{format_size(synced_size)}{m}/{format_size(effective_total)}"
-    else:
-        return format_size(total_size)
-
-
-def format_sync_subtitle(
-    status: "SyncStatus",
-    unit: str = "charts",
-    excess_size: int = 0
-) -> str:
-    """
-    Format a sync status subtitle line.
-
-    Args:
-        status: SyncStatus with chart/archive counts
-        unit: "charts" or "archives"
-        excess_size: Size of excess data (purgeable, shown in red)
-
-    Returns:
-        Formatted string like "Synced: 108/108 charts (4.2 GB + 1.6 GB/4.2 GB) | 100%"
-        Or if everything is purgeable: "Purgeable: 1.5 GB"
-    """
-    if status.total_charts == 0:
-        if excess_size > 0:
-            return f"Purgeable: {Colors.RED}{format_size(excess_size)}{Colors.MUTED}"
+    if total_charts == 0 and purgeable_files == 0 and missing_charts == 0:
         return ""
 
-    pct = (status.synced_charts / status.total_charts * 100)
-    charts_str = format_colored_count(status.synced_charts, status.total_charts)
+    pct = calc_percent(synced_charts, total_charts)
 
-    effective_total_size = status.total_size if status.total_size > 0 else status.synced_size
-    size_str = format_colored_size(status.synced_size, effective_total_size, excess_size=excess_size)
+    parts = []
+    if total_charts > 0:
+        parts.append(f"{synced_charts}/{total_charts} charts")
+    if total_setlists > 0:
+        parts.append(f"{enabled_setlists}/{total_setlists} setlists")
 
-    return f"Synced: {charts_str} {unit} ({size_str}) | {pct:.0f}%"
+    info = ", ".join(parts)
+    if total_size > 0:
+        info += f" ({format_size(total_size)})"
+
+    result = f"{pct}% | {info}"
+
+    # Show full delta (add + remove)
+    missing_size = max(0, total_size - synced_size) if synced_size > 0 else 0
+    has_delta = missing_charts > 0 or purgeable_files > 0 or purgeable_charts > 0 or missing_size > 0
+    if has_delta:
+        delta = format_delta(
+            add_size=missing_size,
+            add_files=missing_charts,
+            add_charts=missing_charts,
+            remove_size=purgeable_size,
+            remove_files=purgeable_files,
+            remove_charts=purgeable_charts,
+            mode=delta_mode,
+        )
+        if delta:
+            result += f" {delta}"
+
+    return result
+
+
+def format_home_item(
+    enabled_setlists: int,
+    total_setlists: int,
+    total_size: int,
+    synced_size: int,
+    purgeable_files: int = 0,
+    purgeable_charts: int = 0,
+    purgeable_size: int = 0,
+    missing_charts: int = 0,
+    disabled: bool = False,
+    delta_mode: str = "size",
+) -> str:
+    """
+    Format home screen item line.
+
+    Enabled synced: 100% | 5/30 setlists, 4.0 GB
+    Enabled partial: 35% | 5/30 setlists, [+2.3 GB] or [+50 files]
+    Disabled: 5/30 setlists, 4.0 GB (greyed by caller)
+    With purgeable: ... [+2.3 GB / -317 MB] or [+50 files / -80 files]
+    """
+    # Setlists part
+    if total_setlists > 0:
+        setlists_str = f"{enabled_setlists}/{total_setlists} setlists"
+    else:
+        setlists_str = ""
+
+    missing_size = max(0, total_size - synced_size)
+
+    if disabled:
+        # Disabled: no percentage, show totals greyed (caller handles grey)
+        parts = []
+        if setlists_str:
+            parts.append(setlists_str)
+        if total_size > 0:
+            parts.append(format_size(total_size))
+        result = ", ".join(parts) if parts else ""
+        # Disabled items only show purgeable (no add delta)
+        if purgeable_files > 0 or purgeable_charts > 0 or purgeable_size > 0:
+            delta = format_delta(
+                remove_size=purgeable_size,
+                remove_files=purgeable_files,
+                remove_charts=purgeable_charts,
+                mode=delta_mode,
+            )
+            if delta:
+                result = f"{result} {delta}" if result else delta
+    else:
+        # Enabled: show percentage and size/delta
+        is_synced = missing_size <= 0
+        pct = 100 if is_synced else calc_percent(synced_size, total_size)
+
+        parts = []
+        if setlists_str:
+            parts.append(setlists_str)
+
+        if is_synced:
+            if total_size > 0:
+                parts.append(format_size(total_size))
+            info = ", ".join(parts) if parts else ""
+            result = f"{pct}% | {info}" if info else f"{pct}%"
+            # Synced but has purgeable
+            if purgeable_files > 0 or purgeable_charts > 0 or purgeable_size > 0:
+                delta = format_delta(
+                    remove_size=purgeable_size,
+                    remove_files=purgeable_files,
+                    remove_charts=purgeable_charts,
+                    mode=delta_mode,
+                )
+                if delta:
+                    result += f" {delta}"
+        else:
+            info = ", ".join(parts) if parts else ""
+            # Has missing - combine add and remove in one delta
+            delta = format_delta(
+                add_size=missing_size,
+                add_files=missing_charts,  # Use chart count for files (best we have)
+                add_charts=missing_charts,
+                remove_size=purgeable_size,
+                remove_files=purgeable_files,
+                remove_charts=purgeable_charts,
+                mode=delta_mode,
+            )
+            if delta:
+                if info:
+                    result = f"{pct}% | {info} {delta}"
+                else:
+                    result = f"{pct}% | {delta}"
+            else:
+                result = f"{pct}% | {info}" if info else f"{pct}%"
+
+    return result
+
+
+def format_setlist_item(
+    total_charts: int,
+    synced_charts: int,
+    total_size: int,
+    synced_size: int,
+    purgeable_files: int = 0,
+    purgeable_charts: int = 0,
+    purgeable_size: int = 0,
+    missing_charts: int = 0,
+    disabled: bool = False,
+    unit: str = "charts",
+    delta_mode: str = "size",
+) -> str:
+    """
+    Format setlist item line.
+
+    Enabled synced: 100% | 427 charts, 3.8 GB
+    Enabled partial: 80% | 427 charts, [+500 MB] or [+50 files]
+    Disabled: 427 charts, 3.8 GB (greyed by caller)
+    With purgeable: ... [+500 MB / -200 MB] or [+50 files / -200 files]
+    """
+    # Charts/archives count
+    count_str = f"{total_charts} {unit}" if total_charts > 0 else ""
+    missing_size = max(0, total_size - synced_size)
+
+    if disabled:
+        # Disabled: no percentage, show totals (caller handles grey)
+        parts = []
+        if count_str:
+            parts.append(count_str)
+        if total_size > 0:
+            parts.append(format_size(total_size))
+        result = ", ".join(parts) if parts else ""
+        # Disabled items only show purgeable (no add delta)
+        if purgeable_files > 0 or purgeable_charts > 0 or purgeable_size > 0:
+            delta = format_delta(
+                remove_size=purgeable_size,
+                remove_files=purgeable_files,
+                remove_charts=purgeable_charts,
+                mode=delta_mode,
+            )
+            if delta:
+                result = f"{result} {delta}" if result else delta
+    else:
+        # Enabled: show percentage and size/delta
+        is_synced = synced_charts >= total_charts or missing_size <= 0
+        pct = calc_percent(synced_charts, total_charts) if total_charts > 0 else 100
+
+        parts = []
+        if count_str:
+            parts.append(count_str)
+
+        if is_synced:
+            if total_size > 0:
+                parts.append(format_size(total_size))
+            info = ", ".join(parts) if parts else ""
+            result = f"{pct}% | {info}" if info else f"{pct}%"
+            # Synced but has purgeable
+            if purgeable_files > 0 or purgeable_charts > 0 or purgeable_size > 0:
+                delta = format_delta(
+                    remove_size=purgeable_size,
+                    remove_files=purgeable_files,
+                    remove_charts=purgeable_charts,
+                    mode=delta_mode,
+                )
+                if delta:
+                    result += f" {delta}"
+        else:
+            info = ", ".join(parts) if parts else ""
+            # Has missing - combine add and remove in one delta
+            delta = format_delta(
+                add_size=missing_size,
+                add_files=missing_charts,  # Use chart count for files (best we have)
+                add_charts=missing_charts,
+                remove_size=purgeable_size,
+                remove_files=purgeable_files,
+                remove_charts=purgeable_charts,
+                mode=delta_mode,
+            )
+            if delta:
+                if info:
+                    result = f"{pct}% | {info} {delta}"
+                else:
+                    result = f"{pct}% | {delta}"
+            else:
+                result = f"{pct}% | {info}" if info else f"{pct}%"
+
+    return result
+
+
+def format_drive_status(
+    synced_charts: int,
+    total_charts: int,
+    enabled_setlists: int,
+    total_setlists: int,
+    total_size: int,
+    synced_size: int = 0,
+    missing_charts: int = 0,
+    purgeable_files: int = 0,
+    purgeable_charts: int = 0,
+    purgeable_size: int = 0,
+    disabled: bool = False,
+    delta_mode: str = "size",
+) -> str:
+    """
+    Format drive config status line.
+
+    Enabled: 100% | 562/562 charts, 5/30 setlists (4.0 GB) [+50 charts / -80 charts]
+    Disabled: DISABLED [-317 MB]
+    """
+    if disabled:
+        if purgeable_files > 0 or purgeable_charts > 0:
+            delta = format_delta(
+                remove_size=purgeable_size,
+                remove_files=purgeable_files,
+                remove_charts=purgeable_charts,
+                mode=delta_mode,
+            )
+            return f"{Colors.MUTED}DISABLED{Colors.RESET} {delta}"
+        return f"{Colors.MUTED}DISABLED{Colors.RESET}"
+
+    return format_status_line(
+        synced_charts=synced_charts,
+        total_charts=total_charts,
+        enabled_setlists=enabled_setlists,
+        total_setlists=total_setlists,
+        total_size=total_size,
+        synced_size=synced_size,
+        missing_charts=missing_charts,
+        purgeable_files=purgeable_files,
+        purgeable_charts=purgeable_charts,
+        purgeable_size=purgeable_size,
+        delta_mode=delta_mode,
+    )
 
 
 def format_purge_tree(files: list[tuple[Path, int]], base_path: Path) -> list[str]:

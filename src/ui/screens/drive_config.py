@@ -14,7 +14,7 @@ from src.sync.download_planner import is_archive_file
 from src.sync.state import SyncState
 from src.stats import get_best_stats
 from ..primitives import Colors
-from ..components import format_colored_size, format_sync_subtitle
+from ..components import format_drive_status, format_setlist_item
 from ..widgets import Menu, MenuItem, MenuDivider
 
 
@@ -178,28 +178,37 @@ def show_subfolder_settings(
     while True:
         drive_enabled = user_settings.is_drive_enabled(folder_id)
 
-        subtitle = ""
-        if not drive_enabled:
-            if download_path:
-                excess_charts, excess_size = count_purgeable_files([folder], download_path, user_settings, sync_state)
-                if excess_charts > 0:
-                    subtitle = f"DRIVE DISABLED - {Colors.RED}Purgeable: {excess_charts} files ({format_size(excess_size)}){Colors.RESET}"
-                else:
-                    subtitle = "DRIVE DISABLED"
-            else:
-                subtitle = "DRIVE DISABLED"
-        elif download_path:
-            status = get_sync_status([folder], download_path, user_settings, sync_state)
-            excess_charts, excess_size = count_purgeable_files([folder], download_path, user_settings, sync_state)
+        # Get counts for status line
+        status = get_sync_status([folder], download_path, user_settings, sync_state) if download_path else None
+        excess_files, excess_size, excess_charts = count_purgeable_files([folder], download_path, user_settings, sync_state) if download_path else (0, 0, 0)
 
-            if status.total_charts > 0 or excess_charts > 0:
-                if is_custom and not status.is_actual_charts:
-                    unit = "archives"
-                else:
-                    unit = "charts"
-                subtitle = format_sync_subtitle(status, unit=unit, excess_size=excess_size)
+        # Count enabled setlists
+        enabled_setlist_count = sum(
+            1 for s in setlists
+            if user_settings.is_subfolder_enabled(folder_id, s)
+        )
 
-        menu = Menu(title=f"{folder_name} - Setlists:", subtitle=subtitle, space_hint="Toggle")
+        delta_mode = user_settings.delta_mode if user_settings else "size"
+
+        # Build subtitle using format_drive_status
+        subtitle = format_drive_status(
+            synced_charts=status.synced_charts if status else 0,
+            total_charts=status.total_charts if status else 0,
+            enabled_setlists=enabled_setlist_count,
+            total_setlists=len(setlists),
+            total_size=status.total_size if status else 0,
+            synced_size=status.synced_size if status else 0,
+            missing_charts=status.missing_charts if status else 0,
+            purgeable_files=excess_files,
+            purgeable_charts=excess_charts,
+            purgeable_size=excess_size,
+            disabled=not drive_enabled,
+            delta_mode=delta_mode,
+        )
+
+        mode_label = {"size": "Size  ", "files": "Files ", "charts": "Charts"}.get(delta_mode, "Size  ")
+        legend = f"{Colors.MUTED}[Tab]{Colors.RESET} {mode_label}   {Colors.RESET}+{Colors.MUTED} add   {Colors.RED}-{Colors.MUTED} remove"
+        menu = Menu(title=f"{folder_name} - Setlists:", subtitle=subtitle, space_hint="Toggle", footer=legend)
 
         for i, setlist_name in enumerate(setlists):
             setlist_enabled = user_settings.is_subfolder_enabled(folder_id, setlist_name)
@@ -214,32 +223,57 @@ def show_subfolder_settings(
                 item_count = stats.get("charts", {}).get("total", 0)
                 unit = "charts" if item_count != 1 else "chart"
 
+            # Get downloaded size for this setlist
             downloaded_size = 0
             if local_folder_path:
                 setlist_path = local_folder_path / setlist_name
                 if setlist_path.exists():
                     downloaded_size = _get_folder_size(setlist_path)
 
-            desc_parts = []
-            if item_count:
-                desc_parts.append(f"{item_count} {unit}")
-            if total_size:
-                desc_parts.append(format_colored_size(
-                    downloaded_size, total_size,
-                    synced_is_excess=(not setlist_enabled and downloaded_size > 0)
-                ))
-            description = ", ".join(desc_parts) if desc_parts else None
+            # Calculate purgeable for this setlist (if disabled but has content)
+            # Only show deltas when drive is enabled
+            setlist_purgeable_files = 0
+            setlist_purgeable_size = 0
+            missing_charts = 0
+            is_fully_synced = downloaded_size >= total_size and total_size > 0
+
+            if drive_enabled:
+                if not setlist_enabled and downloaded_size > 0:
+                    setlist_purgeable_size = downloaded_size
+                    # Rough estimate: count files in the folder
+                    if local_folder_path:
+                        setlist_path = local_folder_path / setlist_name
+                        if setlist_path.exists():
+                            try:
+                                setlist_purgeable_files = sum(1 for _ in setlist_path.rglob("*") if _.is_file())
+                            except OSError:
+                                pass
+
+                # Calculate missing charts (only if enabled and not fully synced)
+                if setlist_enabled and not is_fully_synced:
+                    missing_charts = item_count
+
+            # Format using new function
+            description = format_setlist_item(
+                total_charts=item_count,
+                synced_charts=item_count if is_fully_synced else 0,
+                total_size=total_size,
+                synced_size=downloaded_size,
+                purgeable_files=setlist_purgeable_files,
+                purgeable_charts=item_count if setlist_purgeable_files > 0 else 0,
+                purgeable_size=setlist_purgeable_size,
+                missing_charts=missing_charts,
+                disabled=not setlist_enabled or not drive_enabled,
+                unit=unit,
+                delta_mode=delta_mode,
+            )
 
             item_disabled = not setlist_enabled or not drive_enabled
             show_toggle_colored = setlist_enabled and drive_enabled
 
-            menu.add_item(MenuItem(setlist_name, value=("toggle", i, setlist_name), description=description, disabled=item_disabled, show_toggle=show_toggle_colored))
+            menu.add_item(MenuItem(setlist_name, value=("toggle", i, setlist_name), description=description if description else None, disabled=item_disabled, show_toggle=show_toggle_colored))
 
         menu.add_item(MenuDivider(pinned=True))
-
-        if not drive_enabled:
-            menu.add_item(MenuItem("Enable Drive", hotkey="R", value=("enable_drive", None, None), pinned=True))
-            menu.add_item(MenuDivider(pinned=True))
 
         menu.add_item(MenuItem("Enable ALL", hotkey="E", value=("enable_all", None, None), pinned=True))
         menu.add_item(MenuItem("Disable ALL", hotkey="D", value=("disable_all", None, None), pinned=True))
@@ -260,15 +294,16 @@ def show_subfolder_settings(
         if result is None or result.value[0] == "back":
             break
 
+        # Handle Tab to cycle delta mode
+        if result.action == "tab":
+            selected_index = menu._selected
+            user_settings.cycle_delta_mode()
+            user_settings.save()
+            continue
+
         action, idx, setlist_name = result.value
 
-        if action == "enable_drive":
-            selected_index = menu._selected_before_hotkey
-            user_settings.enable_drive(folder_id)
-            user_settings.save()
-            changed = True
-
-        elif action == "enable_all":
+        if action == "enable_all":
             selected_index = menu._selected_before_hotkey
             if not user_settings.is_drive_enabled(folder_id):
                 user_settings.enable_drive(folder_id)
@@ -284,10 +319,12 @@ def show_subfolder_settings(
 
         elif action == "toggle":
             selected_index = menu._selected
-            is_enabling = not user_settings.is_subfolder_enabled(folder_id, setlist_name)
-            if is_enabling and not user_settings.is_drive_enabled(folder_id):
+            if not user_settings.is_drive_enabled(folder_id):
+                # Drive is disabled - just enable it, don't toggle setlist
                 user_settings.enable_drive(folder_id)
-            user_settings.toggle_subfolder(folder_id, setlist_name)
+            else:
+                # Drive is enabled - toggle the setlist
+                user_settings.toggle_subfolder(folder_id, setlist_name)
             user_settings.save()
             changed = True
 

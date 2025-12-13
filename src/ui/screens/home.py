@@ -8,12 +8,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.core.formatting import format_size
 from src.config import UserSettings, DrivesConfig, extract_subfolders_from_manifest
 from src.sync import get_sync_status, count_purgeable_files, SyncStatus, FolderStats, FolderStatsCache
 from src.sync.state import SyncState
 from ..primitives import Colors
-from ..components import format_colored_count, format_colored_size, format_sync_subtitle
+from ..components import format_status_line, format_home_item, format_delta
 from ..widgets import Menu, MenuItem, MenuDivider, MenuGroupHeader
 
 if TYPE_CHECKING:
@@ -24,7 +23,7 @@ if TYPE_CHECKING:
 class MainMenuCache:
     """Cache for expensive main menu calculations."""
     subtitle: str = ""
-    purge_desc: str | None = None
+    sync_action_desc: str = ""
     folder_stats: dict = field(default_factory=dict)
     group_enabled_counts: dict = field(default_factory=dict)
 
@@ -37,36 +36,43 @@ def _compute_folder_stats(
 ) -> FolderStats:
     """Compute stats for a single folder (sync status, purge counts, display string)."""
     folder_id = folder.get("folder_id", "")
-    is_custom = folder.get("is_custom", False)
 
     status = get_sync_status([folder], download_path, user_settings, sync_state)
-    purge_count, purge_size = count_purgeable_files([folder], download_path, user_settings, sync_state)
+    purge_files, purge_size, purge_charts = count_purgeable_files([folder], download_path, user_settings, sync_state)
 
-    # Build display string
-    stats_parts = []
-    if status.total_charts or purge_count:
-        if is_custom and not status.is_actual_charts:
-            unit = "archives"
-        else:
-            unit = "charts"
-        stats_parts.append(f"{format_colored_count(status.synced_charts, status.total_charts, excess=purge_count)} {unit}")
-
+    # Get setlist counts
     setlists = extract_subfolders_from_manifest(folder)
+    total_setlists = len(setlists) if setlists else 0
+    enabled_setlists = 0
     if setlists and user_settings:
-        enabled_setlists = [
-            c for c in setlists
+        enabled_setlists = sum(
+            1 for c in setlists
             if user_settings.is_subfolder_enabled(folder_id, c)
-        ]
-        stats_parts.append(f"{len(enabled_setlists)}/{len(setlists)} setlists")
+        )
 
-    stats_parts.append(format_colored_size(status.synced_size, status.total_size, excess_size=purge_size))
+    # Check if drive is enabled
+    drive_enabled = user_settings.is_drive_enabled(folder_id) if user_settings else True
+    delta_mode = user_settings.delta_mode if user_settings else "size"
 
-    display_string = ", ".join(stats_parts) if stats_parts else None
+    # Build display string using new format
+    display_string = format_home_item(
+        enabled_setlists=enabled_setlists,
+        total_setlists=total_setlists,
+        total_size=status.total_size,
+        synced_size=status.synced_size,
+        purgeable_files=purge_files,
+        purgeable_charts=purge_charts,
+        purgeable_size=purge_size,
+        missing_charts=status.missing_charts,
+        disabled=not drive_enabled,
+        delta_mode=delta_mode,
+    )
 
     return FolderStats(
         folder_id=folder_id,
         sync_status=status,
-        purge_count=purge_count,
+        purge_count=purge_files,
+        purge_charts=purge_charts,
         purge_size=purge_size,
         display_string=display_string,
     )
@@ -91,7 +97,10 @@ def compute_main_menu_cache(
 
     global_status = SyncStatus()
     global_purge_count = 0
+    global_purge_charts = 0
     global_purge_size = 0
+    global_enabled_setlists = 0
+    global_total_setlists = 0
 
     for folder in folders:
         folder_id = folder.get("folder_id", "")
@@ -114,29 +123,64 @@ def compute_main_menu_cache(
 
         status = stats.sync_status
         folder_purge_count = stats.purge_count
+        folder_purge_charts = stats.purge_charts
         folder_purge_size = stats.purge_size
         display_string = stats.display_string
 
-        # Aggregate into global stats
-        global_status.total_charts += status.total_charts
-        global_status.synced_charts += status.synced_charts
-        global_status.total_size += status.total_size
-        global_status.synced_size += status.synced_size
-        if status.is_actual_charts:
-            global_status.is_actual_charts = True
+        # Only aggregate enabled drives into global stats for add/sync
+        drive_enabled = user_settings.is_drive_enabled(folder_id) if user_settings else True
+        if drive_enabled:
+            global_status.total_charts += status.total_charts
+            global_status.synced_charts += status.synced_charts
+            global_status.total_size += status.total_size
+            global_status.synced_size += status.synced_size
+            if status.is_actual_charts:
+                global_status.is_actual_charts = True
+        # Always aggregate purgeable (disabled drives may have content to remove)
         global_purge_count += folder_purge_count
+        global_purge_charts += folder_purge_charts
         global_purge_size += folder_purge_size
+
+        # Count setlists
+        setlists = extract_subfolders_from_manifest(folder)
+        if setlists:
+            global_total_setlists += len(setlists)
+            if user_settings:
+                global_enabled_setlists += sum(
+                    1 for c in setlists
+                    if user_settings.is_subfolder_enabled(folder_id, c)
+                )
 
         cache.folder_stats[folder_id] = display_string
 
-    cache.subtitle = format_sync_subtitle(
-        global_status,
-        unit="charts",
-        excess_size=global_purge_size
+    delta_mode = user_settings.delta_mode if user_settings else "size"
+
+    # Build status line: 100% | 562/562 charts, 10/15 setlists (4.0 GB) [+50 charts / -80 charts]
+    cache.subtitle = format_status_line(
+        synced_charts=global_status.synced_charts,
+        total_charts=global_status.total_charts,
+        enabled_setlists=global_enabled_setlists,
+        total_setlists=global_total_setlists,
+        total_size=global_status.total_size,
+        synced_size=global_status.synced_size,
+        missing_charts=global_status.missing_charts,
+        purgeable_files=global_purge_count,
+        purgeable_charts=global_purge_charts,
+        purgeable_size=global_purge_size,
+        delta_mode=delta_mode,
     )
 
-    if global_purge_count > 0:
-        cache.purge_desc = f"{Colors.RED}{global_purge_count} files, {format_size(global_purge_size)}{Colors.MUTED}"
+    # Build sync action description: [+2.6 MB / -317.3 MB] or [+50 files / -80 files]
+    cache.sync_action_desc = format_delta(
+        add_size=global_status.missing_size,
+        add_files=global_status.missing_charts,  # Use chart count for files (best we have)
+        add_charts=global_status.missing_charts,
+        remove_size=global_purge_size,
+        remove_files=global_purge_count,
+        remove_charts=global_purge_charts,
+        mode=delta_mode,
+        empty_text="Everything in sync",
+    )
 
     if drives_config:
         for group_name in drives_config.get_groups():
@@ -203,7 +247,9 @@ def show_main_menu(
     if cache is None:
         cache = compute_main_menu_cache(folders, user_settings, download_path, drives_config, sync_state)
 
-    legend = f"{Colors.RESET}White{Colors.MUTED} = synced   {Colors.RED}Red{Colors.MUTED} = purgeable"
+    delta_mode = user_settings.delta_mode if user_settings else "size"
+    mode_label = {"size": "Size  ", "files": "Files ", "charts": "Charts"}.get(delta_mode, "Size  ")
+    legend = f"{Colors.MUTED}[Tab]{Colors.RESET} {mode_label}   {Colors.RESET}+{Colors.MUTED} add   {Colors.RED}-{Colors.MUTED} remove"
     menu = Menu(title="Available chart packs:", subtitle=cache.subtitle, space_hint="Toggle", footer=legend, esc_label="Quit")
 
     folder_lookup = {f.get("folder_id", ""): f for f in folders}
@@ -274,7 +320,7 @@ def show_main_menu(
             add_folder_item(folder)
 
     menu.add_item(MenuDivider())
-    menu.add_item(MenuItem("Sync", hotkey="S", value=("sync", None), description="Download missing, purge extras"))
+    menu.add_item(MenuItem("Sync", hotkey="S", value=("sync", None), description=cache.sync_action_desc))
 
     menu.add_item(MenuDivider())
     menu.add_item(MenuItem("Add Custom Folder", hotkey="A", value=("add_custom", None), description="Add your own Google Drive folder"))
@@ -292,6 +338,10 @@ def show_main_menu(
     result = menu.run(initial_index=selected_index)
     if result is None:
         return ("quit", None, selected_index)
+
+    # Handle Tab to cycle delta mode
+    if result.action == "tab":
+        return ("cycle_delta_mode", None, menu._selected)
 
     restore_pos = menu._selected_before_hotkey if menu._selected_before_hotkey != menu._selected else menu._selected
 
