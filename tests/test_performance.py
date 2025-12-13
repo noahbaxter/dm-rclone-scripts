@@ -147,7 +147,7 @@ class TestCountPurgeableUsesCache:
 
         # count_purgeable should NOT rescan
         start = time.time()
-        count, size = count_purgeable_files([folder], base, None, sync_state)
+        count, size, charts = count_purgeable_files([folder], base, None, sync_state)
         elapsed = time.time() - start
 
         # Verify correctness: should find the extra file with correct size
@@ -166,7 +166,7 @@ class TestCountPurgeableUsesCache:
         sync_state.add_file("TestDrive/expected.txt", size=8)
 
         # Call without pre-populating cache
-        count, size = count_purgeable_files([folder], base, None, sync_state)
+        count, size, charts = count_purgeable_files([folder], base, None, sync_state)
 
         # Should still find the extra file correctly
         assert count == 1, "Should find 1 extra file"

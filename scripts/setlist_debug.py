@@ -70,8 +70,8 @@ def main():
     # Call actual count_purgeable_files function
     print(f"\nACTUAL count_purgeable_files RESULT:")
     print("-" * 70)
-    purgeable_count, purgeable_size = count_purgeable_files([folder], path.parent, settings)
-    print(f"  {purgeable_count} files, {format_size(purgeable_size)}")
+    purgeable_count, purgeable_size, purgeable_charts = count_purgeable_files([folder], path.parent, settings)
+    print(f"  {purgeable_count} files ({purgeable_charts} charts), {format_size(purgeable_size)}")
 
     # Show per-setlist breakdown
     print(f"\nPER-SETLIST BREAKDOWN (disabled only):")
