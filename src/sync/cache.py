@@ -21,7 +21,8 @@ class FolderStats:
     """Cached stats for a single folder."""
     folder_id: str
     sync_status: "SyncStatus"
-    purge_count: int
+    purge_count: int  # File count
+    purge_charts: int  # Estimated chart count
     purge_size: int
     display_string: str | None
 

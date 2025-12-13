@@ -8,16 +8,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple, Optional
 
-from ..core.constants import VIDEO_EXTENSIONS
+from ..core.constants import VIDEO_EXTENSIONS, CHART_ARCHIVE_EXTENSIONS
 from .cache import scan_local_files
 from .state import SyncState
+
+
+def _is_archive(path: str) -> bool:
+    """Check if a path is an archive file."""
+    return any(path.lower().endswith(ext) for ext in CHART_ARCHIVE_EXTENSIONS)
 
 
 @dataclass
 class PurgeStats:
     """Detailed breakdown of what would be purged."""
-    # Charts from disabled drives/setlists
-    chart_count: int = 0
+    # Files from disabled drives/setlists
+    chart_count: int = 0  # Actually file count (legacy naming)
     chart_size: int = 0
     # Extra files not in manifest
     extra_file_count: int = 0
@@ -28,6 +33,8 @@ class PurgeStats:
     # Video files (when delete_videos is enabled)
     video_count: int = 0
     video_size: int = 0
+    # Estimated chart count (archives = 1 chart each)
+    estimated_charts: int = 0
 
     @property
     def total_files(self) -> int:
@@ -148,10 +155,19 @@ def plan_purge(
 
         if not drive_enabled:
             # Drive is disabled - count ALL local files as "charts" (includes partials)
+            chart_parents = set()
             for rel_path, size in local_files.items():
                 stats.chart_count += 1
                 stats.chart_size += size
                 all_files.append((folder_path / rel_path, size))
+                # Estimate charts: archives are 1 chart, else group by parent folder
+                if _is_archive(rel_path):
+                    stats.estimated_charts += 1
+                else:
+                    parent = str(Path(rel_path).parent)
+                    chart_parents.add(parent)
+            # Add unique parent folders as estimated charts
+            stats.estimated_charts += len(chart_parents)
             continue
 
         # Only scan for partial downloads on ENABLED drives (rglob is expensive)
@@ -159,10 +175,12 @@ def plan_purge(
         if partial_files:
             stats.partial_count += len(partial_files)
             stats.partial_size += sum(size for _, size in partial_files)
+            stats.estimated_charts += len(partial_files)  # Each partial is 1 chart
             all_files.extend(partial_files)
 
         # Drive is enabled - count files in disabled setlists + extra files separately
         disabled_setlist_paths = set()
+        disabled_chart_parents = set()
 
         # Get disabled setlists
         disabled_setlists = user_settings.get_disabled_subfolders(folder_id) if user_settings else set()
@@ -176,6 +194,14 @@ def plan_purge(
                 stats.chart_count += 1
                 stats.chart_size += size
                 all_files.append((folder_path / rel_path, size))
+                # Estimate charts for disabled setlist files
+                if _is_archive(rel_path):
+                    stats.estimated_charts += 1
+                else:
+                    parent = str(Path(rel_path).parent)
+                    disabled_chart_parents.add(parent)
+        # Add unique parent folders as estimated charts
+        stats.estimated_charts += len(disabled_chart_parents)
 
         # Extra files not tracked in sync_state
         if sync_state:
@@ -191,6 +217,9 @@ def plan_purge(
                 stats.extra_file_count += 1
                 stats.extra_file_size += size
                 all_files.append((f, size))
+                # Only count archive extras as charts
+                if _is_archive(rel_path):
+                    stats.estimated_charts += 1
 
         # Count video files when delete_videos is enabled
         delete_videos = user_settings.delete_videos if user_settings else True
@@ -219,15 +248,15 @@ def count_purgeable_files(
     base_path: Path,
     user_settings=None,
     sync_state: Optional[SyncState] = None,
-) -> Tuple[int, int]:
+) -> Tuple[int, int, int]:
     """
-    Count files that would be purged (backward-compatible wrapper).
+    Count files that would be purged.
 
     Returns:
-        Tuple of (total_files, total_size_bytes)
+        Tuple of (total_files, total_size_bytes, estimated_charts)
     """
     _, stats = plan_purge(folders, base_path, user_settings, sync_state)
-    return stats.total_files, stats.total_size
+    return stats.total_files, stats.total_size, stats.estimated_charts
 
 
 def count_purgeable_detailed(
