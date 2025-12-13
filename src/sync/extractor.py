@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Tuple, Set
 
 from ..core.constants import VIDEO_EXTENSIONS
+from ..core.formatting import relative_posix
 
 # Optional archive format support
 try:
@@ -156,7 +157,7 @@ def scan_extracted_files(folder_path: Path, base_path: Path = None) -> dict[str,
     for f in folder_path.rglob("*"):
         if f.is_file() and f.name != CHECKSUM_FILE:
             try:
-                rel_path = str(f.relative_to(base_path))
+                rel_path = relative_posix(f, base_path)
                 files[rel_path] = f.stat().st_size
             except (ValueError, OSError):
                 pass

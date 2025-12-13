@@ -2,7 +2,8 @@
 Formatting and sanitization utilities for DM Chart Sync.
 """
 
-from typing import Any, Callable, List, Optional
+from pathlib import Path
+from typing import Any, Callable, List, Optional, Union
 
 
 # ============================================================================
@@ -79,6 +80,42 @@ def sanitize_path(path: str) -> str:
     parts = path.split("/")
     sanitized_parts = [sanitize_filename(part) for part in parts]
     return "/".join(sanitized_parts)
+
+
+# ============================================================================
+# Cross-platform path utilities
+# ============================================================================
+
+def to_posix(path: Union[str, Path]) -> str:
+    """
+    Convert a path to a posix-style string (forward slashes).
+
+    Works consistently across platforms - use this instead of str(path)
+    when storing or comparing paths.
+    """
+    if isinstance(path, Path):
+        return path.as_posix()
+    return path.replace("\\", "/")
+
+
+def relative_posix(path: Path, base: Path) -> str:
+    """
+    Get the relative path as a posix-style string.
+
+    Use instead of str(path.relative_to(base)) for cross-platform consistency.
+    """
+    return path.relative_to(base).as_posix()
+
+
+def parent_posix(path: Union[str, Path]) -> str:
+    """
+    Get the parent directory as a posix-style string.
+
+    Use instead of str(Path(path).parent) for cross-platform consistency.
+    """
+    if isinstance(path, str):
+        path = Path(path)
+    return path.parent.as_posix()
 
 
 # ============================================================================

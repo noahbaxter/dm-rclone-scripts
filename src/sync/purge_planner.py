@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List, Tuple, Optional
 
 from ..core.constants import VIDEO_EXTENSIONS, CHART_ARCHIVE_EXTENSIONS
+from ..core.formatting import relative_posix, parent_posix
 from .cache import scan_local_files
 from .state import SyncState
 
@@ -164,8 +165,7 @@ def plan_purge(
                 if _is_archive(rel_path):
                     stats.estimated_charts += 1
                 else:
-                    parent = str(Path(rel_path).parent)
-                    chart_parents.add(parent)
+                    chart_parents.add(parent_posix(rel_path))
             # Add unique parent folders as estimated charts
             stats.estimated_charts += len(chart_parents)
             continue
@@ -198,8 +198,7 @@ def plan_purge(
                 if _is_archive(rel_path):
                     stats.estimated_charts += 1
                 else:
-                    parent = str(Path(rel_path).parent)
-                    disabled_chart_parents.add(parent)
+                    disabled_chart_parents.add(parent_posix(rel_path))
         # Add unique parent folders as estimated charts
         stats.estimated_charts += len(disabled_chart_parents)
 
@@ -211,7 +210,7 @@ def plan_purge(
 
         extra_paths = set()
         for f, size in extras:
-            rel_path = str(f.relative_to(folder_path))
+            rel_path = relative_posix(f, folder_path)
             extra_paths.add(rel_path)
             if rel_path not in disabled_setlist_paths:
                 stats.extra_file_count += 1
