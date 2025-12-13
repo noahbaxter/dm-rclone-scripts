@@ -46,5 +46,5 @@ def print_header():
         print(''.join(result) + Colors.RESET)
 
     # Print version left-aligned under header
-    print(f" {Colors.DIM}by Dichotic v{__version__}{Colors.RESET}")
+    print(f" {Colors.DIM}v{__version__}{Colors.RESET}")
     print()

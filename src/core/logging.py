@@ -18,7 +18,7 @@ class TeeOutput:
         r'[▸▼▲►◀]',              # Menu cursor/expand indicators
         r'↑.*↓.*Navigate',       # Menu navigation instructions
         r'^\s*$',                 # Blank lines
-        r'by Dichotic',          # Version tagline (part of banner)
+        r'^\s*v\d+\.',            # Version tagline (part of banner)
         r'^\s*↓.*MB\s*\(\d+%\)', # Download progress lines (↓ File: X/Y MB (N%))
     ]
 
