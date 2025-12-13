@@ -10,6 +10,9 @@ from src.core.formatting import (
     dedupe_files_by_newest,
     format_size,
     format_duration,
+    to_posix,
+    relative_posix,
+    parent_posix,
 )
 
 
@@ -220,6 +223,95 @@ class TestFormatDuration:
         assert format_duration(3660) == "1h 1m"
         assert format_duration(7200) == "2h 0m"
         assert format_duration(5400) == "1h 30m"
+
+
+class TestCrossPlatformPaths:
+    """
+    Tests for cross-platform path utilities.
+
+    These ensure consistent forward-slash paths regardless of OS.
+    Critical for sync_state.json where paths must match across platforms.
+    """
+
+    def test_to_posix_normalizes_backslashes(self):
+        """to_posix converts backslashes to forward slashes."""
+        assert to_posix("folder\\sub\\file.txt") == "folder/sub/file.txt"
+        assert to_posix("a\\b/c\\d") == "a/b/c/d"  # Mixed
+
+    def test_relative_posix_with_real_paths(self, tmp_path):
+        """relative_posix produces forward slashes from real filesystem paths."""
+        nested = tmp_path / "a" / "b" / "c"
+        nested.mkdir(parents=True)
+        test_file = nested / "file.txt"
+        test_file.touch()
+
+        result = relative_posix(test_file, tmp_path)
+        assert result == "a/b/c/file.txt"
+        assert "\\" not in result
+
+    def test_parent_posix_extracts_parent(self):
+        """parent_posix returns parent with forward slashes."""
+        assert parent_posix("a/b/c/file.txt") == "a/b/c"
+        assert parent_posix("file.txt") == "."
+
+    # --- Integration: actual function compatibility ---
+
+    def test_scan_functions_produce_compatible_paths(self, tmp_path):
+        """
+        THE critical integration test: scan_extracted_files and scan_local_files
+        must produce identical path keys for the same files.
+
+        This is the actual bug we fixed - if scan_extracted_files used
+        str(path.relative_to()) instead of relative_posix(), it would produce
+        backslash paths on Windows that wouldn't match scan_local_files output.
+        """
+        from src.sync.extractor import scan_extracted_files
+        from src.sync.cache import scan_local_files
+
+        # Create nested structure like an extracted archive
+        chart_folder = tmp_path / "Setlist" / "Chart Name" / "Subfolder"
+        chart_folder.mkdir(parents=True)
+        (chart_folder / "song.ini").write_text("[song]")
+        (chart_folder / "notes.mid").write_bytes(b"midi data")
+        (chart_folder.parent / "album.png").write_bytes(b"image")
+
+        # Scan with both functions
+        extracted_paths = set(scan_extracted_files(tmp_path, tmp_path).keys())
+        local_paths = set(scan_local_files(tmp_path).keys())
+
+        # They MUST produce identical path sets
+        assert extracted_paths == local_paths, (
+            f"Path mismatch!\n"
+            f"scan_extracted_files: {sorted(extracted_paths)}\n"
+            f"scan_local_files: {sorted(local_paths)}"
+        )
+
+        # Double-check no backslashes snuck in
+        for path in extracted_paths:
+            assert "\\" not in path, f"Backslash in extracted path: {path}"
+        for path in local_paths:
+            assert "\\" not in path, f"Backslash in local path: {path}"
+
+    def test_parent_grouping_consistent(self):
+        """
+        Simulates purge_planner grouping files by parent folder.
+        Parent paths must be consistent for proper chart counting.
+        """
+        files = [
+            "Setlist/ChartA/song.ini",
+            "Setlist/ChartA/notes.mid",
+            "Setlist/ChartB/song.ini",
+            "Setlist/ChartB/notes.mid",
+        ]
+
+        # Group by parent (simulates chart counting)
+        parents = set()
+        for f in files:
+            parents.add(parent_posix(f))
+
+        assert len(parents) == 2
+        assert "Setlist/ChartA" in parents
+        assert "Setlist/ChartB" in parents
 
 
 if __name__ == "__main__":

@@ -1,7 +1,8 @@
 """
 Tests for download planner logic.
 
-Tests plan_downloads() decision logic - what gets downloaded, skipped, or flagged.
+Integration tests for plan_downloads() - what gets downloaded, skipped, or flagged.
+Helper functions (is_archive_file) are tested implicitly through archive detection tests.
 """
 
 import tempfile
@@ -9,30 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from src.sync.download_planner import plan_downloads, is_archive_file, DownloadTask
+from src.sync.download_planner import plan_downloads, DownloadTask
 from src.sync.state import SyncState
-
-
-class TestIsArchiveFile:
-    """Tests for is_archive_file() helper."""
-
-    def test_zip_detected(self):
-        assert is_archive_file("chart.zip")
-        assert is_archive_file("chart.ZIP")
-
-    def test_7z_detected(self):
-        assert is_archive_file("chart.7z")
-        assert is_archive_file("chart.7Z")
-
-    def test_rar_detected(self):
-        assert is_archive_file("chart.rar")
-        assert is_archive_file("chart.RAR")
-
-    def test_non_archive_not_detected(self):
-        assert not is_archive_file("chart.sng")
-        assert not is_archive_file("song.ini")
-        assert not is_archive_file("notes.mid")
-        assert not is_archive_file("song.ogg")
 
 
 class TestPlanDownloadsSkipping:

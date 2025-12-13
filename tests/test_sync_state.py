@@ -119,6 +119,46 @@ class TestSyncStateArchiveTracking:
         assert "TestDrive/Setlist/song.ini" not in sync_state.get_all_files()
         assert "TestDrive/Setlist/notes.mid" not in sync_state.get_all_files()
 
+    def test_all_paths_use_forward_slashes(self, temp_sync_root):
+        """
+        Critical cross-platform test: ALL paths in sync_state must use forward slashes.
+
+        On Windows, Path operations naturally produce backslashes. If any code path
+        stores paths with backslashes, lookups will fail because the rest of the
+        codebase uses forward slashes consistently.
+
+        This test verifies the paths returned by get_all_files(), which is what
+        gets compared against local file scans during sync/purge operations.
+        """
+        sync_state = SyncState(temp_sync_root)
+        sync_state.load()
+
+        # Add archive with nested extracted files
+        sync_state.add_archive(
+            path="TestDrive/Deep/Nested/Path/Chart.7z",
+            md5="test123",
+            archive_size=1000,
+            files={
+                "subfolder/song.ini": 100,
+                "subfolder/notes.mid": 500,
+                "album.png": 200
+            }
+        )
+
+        # Add standalone file with deep path
+        sync_state.add_file("TestDrive/Another/Path/file.txt", size=50)
+
+        # Verify all tracked paths use forward slashes
+        all_files = sync_state.get_all_files()
+
+        # Should have 4 files total
+        assert len(all_files) == 4
+
+        for path in all_files:
+            assert "\\" not in path, f"Backslash found in tracked path: {path}"
+            # Deep paths must contain forward slashes
+            assert "/" in path, f"Deep path missing forward slashes: {path}"
+
 
 class TestGetSyncStatusWithSyncState:
     """Tests for get_sync_status using sync_state."""
