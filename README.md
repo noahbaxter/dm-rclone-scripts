@@ -1,77 +1,90 @@
-# DM Chart Sync
+# Synchotic
 
-Download Clone Hero charts from Google Drive. No setup required.
+A Clone Hero chart downloader. Browse community chart packs, pick what you want, and sync.
 
 ![Screenshot](screenshot.png)
 
-## Usage
+## Download
 
-### Windows
-Download `dm-sync.exe` from [Releases](../../releases) and run it.
+**[Download the latest release here](../../releases/latest)**
 
-### macOS
-Download `dm-sync-macos` from [Releases](../../releases), then:
-```bash
-xattr -d com.apple.quarantine dm-sync-macos
-chmod +x dm-sync-macos
-./dm-sync-macos
-```
+- **Windows:** Download `synchotic.exe` and run it
+- **macOS:** Download `synchotic-macos`. macOS blocks apps from unknown developers, so open Terminal and run:
+  ```
+  cd ~/Downloads && chmod +x synchotic-macos && xattr -d com.apple.quarantine synchotic-macos
+  ```
+  Then double-click to run. (Move it somewhere else first if you don't want it in Downloads.)
 
-### From Source
+## How It Works
+
+1. Launch the app - it fetches the latest chart pack list automatically
+2. Pick which chart packs you want (toggle with **Space**)
+3. Press **S** to Sync - downloads enabled charts, removes disabled ones
+
+Charts download to a `Sync Charts` folder next to the app.
+
+## Controls
+
+| Key | Action |
+|-----|--------|
+| **↑↓** or **1-9** | Navigate / jump to item |
+| **Enter** | Open pack settings |
+| **Space** | Toggle pack on/off |
+| **S** | Sync all |
+| **Tab** | Switch view (Size / Files / Charts) |
+| **A** | Add custom Google Drive folder |
+| **G** | Sign in/out of Google |
+| **Esc** | Back / Quit |
+
+## Features
+
+- **Smart sync** - only downloads what's new or changed
+- **Setlist filtering** - pick exactly which setlists you want from each drive
+- **Custom folders** - add your own Google Drive folders
+- **Sign in to Google** - optional, gives you faster downloads with your own quota
+- **Auto-extract** - handles .zip, .7z, and .rar archives automatically
+
+## Troubleshooting
+
+### Downloads fail with path errors (Windows)
+
+Windows blocks paths over 260 characters. To fix:
+
+1. Open Registry Editor (`regedit`)
+2. Go to `HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem`
+3. Set `LongPathsEnabled` to `1`
+4. Restart your computer
+
+### Where are my charts?
+
+In the `Sync Charts` folder, next to where you ran the app.
+
+### Where are logs?
+
+`.dm-sync/logs/` next to the app. Each day gets its own log file.
+
+---
+
+## For Developers
+
+<details>
+<summary>Click to expand</summary>
+
+### Running from Source
+
 ```bash
 pip install -r requirements.txt
 python sync.py
 ```
 
-## Features
+### Building
 
-- **Smart sync** - only downloads new/changed files
-- **Parallel downloads** with auto-retry on rate limits
-- **Setlist filtering** - enable/disable individual setlists per drive
-- **Custom folders** - add your own Google Drive folders
-- **Optional sign-in** - get your own download quota for faster syncs
-- **Archive support** - auto-extracts .7z/.zip/.rar archives with optional video removal
-- **Purge** - clean up disabled content to free disk space
+Builds are automatic via GitHub Actions on push to main.
 
-## Troubleshooting
-
-### Logs
-
-Logs are saved to `.dm-sync/logs/` in the same folder as the executable. Each day creates a new log file (e.g., `2024-12-01.log`).
-
-### Windows Long Paths
-
-If downloads fail with path errors, Windows may be blocking paths over 260 characters. To fix:
-
-1. Open Registry Editor (`regedit`)
-2. Navigate to `HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem`
-3. Set `LongPathsEnabled` to `1`
-4. Restart your computer
-
-## RAR Support (Windows)
-
-RAR files need **7-Zip** or **WinRAR** installed and added to PATH.
-
-### Option 1: 7-Zip (recommended)
-1. Install [7-Zip](https://www.7-zip.org/)
-2. Add to PATH: `C:\Program Files\7-Zip`
-
-### Option 2: WinRAR
-1. Install [WinRAR](https://www.rarlab.com/download.htm)
-2. Add to PATH: `C:\Program Files\WinRAR`
-
-### How to add to PATH
-1. Open Start Menu, search **"Environment Variables"**
-2. Click **"Edit the system environment variables"**
-3. Click **Environment Variables** button
-4. Under **System variables**, select **Path** → **Edit**
-5. Click **New** and paste the path from above
-6. Click **OK** on all windows
-7. **Restart DM Sync**
-
-**Verify:** Open Command Prompt and type `7z` or `unrar` - you should see help text, not "not recognized".
-
-## For Admins
+```bash
+pip install pyinstaller
+pyinstaller --onefile --name synchotic sync.py
+```
 
 ### Manifest Updates
 
@@ -84,12 +97,4 @@ The manifest auto-updates daily via GitHub Actions.
 2. Run `python manifest_gen.py` locally to generate `token.json`
 3. Add GitHub Secrets: `GOOGLE_CREDENTIALS`, `GOOGLE_TOKEN`, `GOOGLE_API_KEY`
 
-### Building
-
-Builds are automatic via GitHub Actions on push to main.
-
-Manual build:
-```bash
-pip install pyinstaller
-pyinstaller --onefile --name dm-sync sync.py
-```
+</details>
