@@ -2,6 +2,7 @@
 Formatting and sanitization utilities for DM Chart Sync.
 """
 
+import re
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Union
 
@@ -75,9 +76,14 @@ def sanitize_filename(filename: str) -> str:
 def sanitize_path(path: str) -> str:
     """
     Sanitize each component of a path for cross-platform compatibility.
+
+    Handles escaped slashes: "//" in folder names is treated as a literal slash
+    (becomes "-" after sanitization), while single "/" is a path separator.
     """
     path = path.replace("\\", "/")
-    parts = path.split("/")
+    # Split only on single "/" - consecutive slashes like "//" are part of folder names
+    # e.g., "Setlist/Heart // Mind/song.ini" → ["Setlist", "Heart // Mind", "song.ini"]
+    parts = re.split(r"(?<!/)/(?!/)", path)
     sanitized_parts = [sanitize_filename(part) for part in parts]
     return "/".join(sanitized_parts)
 

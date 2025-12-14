@@ -116,6 +116,30 @@ class TestSanitizePath:
         clean_path = "folder/subfolder/file.txt"
         assert sanitize_path(clean_path) == clean_path
 
+    def test_forward_slash_in_folder_name(self):
+        """
+        Folder names with forward slashes (escaped as //) should NOT split.
+
+        Google Drive allows "/" in folder names. When building paths, "//" means
+        a literal "/" in the folder name (like "Heart // Mind"), not two path separators.
+        Current behavior creates nested folders - this test documents the bug.
+        """
+        # "Heart // Mind" is ONE folder name containing slashes
+        # Expected: "Setlist/Heart -- Mind/song.ini" (slashes become dashes)
+        # Current bug: splits into nested folders
+        result = sanitize_path("Setlist/Heart // Mind/song.ini")
+        assert result == "Setlist/Heart -- Mind/song.ini"
+
+    def test_triple_slash_in_folder_name(self):
+        """Triple slashes in folder names."""
+        result = sanitize_path("Setlist/A /// B/song.ini")
+        assert result == "Setlist/A --- B/song.ini"
+
+    def test_consecutive_slashes_become_dashes(self):
+        """Multiple consecutive slashes become multiple dashes (stays as one component)."""
+        # "folder//file.txt" is one component "folder//file.txt" → "folder--file.txt"
+        assert sanitize_path("folder//file.txt") == "folder--file.txt"
+
 
 class TestDedupeFilesByNewest:
     """Tests for dedupe_files_by_newest() - keeping newest version of duplicate paths."""
