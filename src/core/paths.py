@@ -138,6 +138,11 @@ def _get_legacy_manifest_path() -> Path:
     return get_app_dir() / "manifest.json"
 
 
+def _get_legacy_sync_state_path() -> Path:
+    """Old location: sync_state.json was under Sync Charts/.dm-sync/"""
+    return get_download_path() / ".dm-sync" / "sync_state.json"
+
+
 def migrate_legacy_files() -> list[str]:
     """
     Migrate files from old locations to new .dm-sync/ directory.
@@ -155,6 +160,7 @@ def migrate_legacy_files() -> list[str]:
         (_get_legacy_settings_path(), get_settings_path(), "user_settings.json"),
         (_get_legacy_token_path(), get_token_path(), "user_token.json"),
         (_get_legacy_manifest_path(), get_manifest_path(), "manifest.json"),
+        (_get_legacy_sync_state_path(), get_sync_state_path(), "sync_state.json"),
     ]
 
     for old_path, new_path, name in migrations:
@@ -163,7 +169,7 @@ def migrate_legacy_files() -> list[str]:
                 # Move file to new location
                 old_path.rename(new_path)
                 migrated.append(name)
-            except Exception as e:
+            except Exception:
                 # If rename fails (cross-device), try copy + delete
                 try:
                     import shutil
@@ -173,5 +179,13 @@ def migrate_legacy_files() -> list[str]:
                 except Exception:
                     # Migration failed, leave old file in place
                     pass
+
+    # Clean up old .dm-sync folder under Sync Charts if empty
+    old_dm_sync = get_download_path() / ".dm-sync"
+    if old_dm_sync.exists():
+        try:
+            old_dm_sync.rmdir()  # Only succeeds if empty
+        except OSError:
+            pass  # Not empty, leave it
 
     return migrated

@@ -77,7 +77,7 @@ class SyncApp:
         cleanup_tmp_dir()
 
         # Load sync state (tracks all synced files)
-        self.sync_state = SyncState(get_download_path())
+        self.sync_state = SyncState()
         self.sync_state.load()
 
         # Clean up legacy check.txt files (replaced by sync_state.json)

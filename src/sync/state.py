@@ -9,6 +9,8 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from ..core.paths import get_sync_state_path, get_download_path
+
 
 class SyncState:
     """
@@ -20,9 +22,15 @@ class SyncState:
 
     VERSION = 1
 
-    def __init__(self, sync_root: Path):
-        self.sync_root = sync_root
-        self.state_file = sync_root / ".dm-sync" / "sync_state.json"
+    def __init__(self, sync_root: Path = None):
+        # For production: use centralized paths from paths.py
+        # For testing: pass sync_root to use temp directory
+        if sync_root:
+            self.sync_root = sync_root
+            self.state_file = sync_root / "sync_state.json"
+        else:
+            self.sync_root = get_download_path()
+            self.state_file = get_sync_state_path()
         self._data = None
         self._files = {}      # Flat cache: path -> file node
         self._archives = {}   # Flat cache: path -> archive node
