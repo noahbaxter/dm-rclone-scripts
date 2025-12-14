@@ -218,10 +218,9 @@ def show_subfolder_settings(
 
             if is_custom:
                 item_count = stats.get("archives", 0)
-                unit = "archives" if item_count != 1 else "archive"
             else:
                 item_count = stats.get("charts", {}).get("total", 0)
-                unit = "charts" if item_count != 1 else "chart"
+            unit = "files" if item_count != 1 else "file"
 
             # Get downloaded size for this setlist
             downloaded_size = 0
