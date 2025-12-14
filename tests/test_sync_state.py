@@ -14,7 +14,7 @@ import pytest
 
 from src.sync.state import SyncState
 from src.sync.status import get_sync_status
-from src.sync.purge_planner import find_extra_files_sync_state
+from src.sync.purge_planner import find_extra_files
 
 
 class TestSyncStateArchiveTracking:
@@ -254,11 +254,12 @@ class TestPurgePlannerWithSyncState:
             files={"song.ini": 6, "notes.mid": 4}
         )
 
-        # Use find_extra_files_sync_state
-        extras = find_extra_files_sync_state(
+        # Use find_extra_files
+        extras = find_extra_files(
             folder_name="TestDrive",
             folder_path=temp_dir / "TestDrive",
-            sync_state=sync_state
+            sync_state=sync_state,
+            manifest_paths=set()
         )
 
         # No files should be flagged as extra
@@ -283,10 +284,11 @@ class TestPurgePlannerWithSyncState:
             files={"song.ini": 6}
         )
 
-        extras = find_extra_files_sync_state(
+        extras = find_extra_files(
             folder_name="TestDrive",
             folder_path=temp_dir / "TestDrive",
-            sync_state=sync_state
+            sync_state=sync_state,
+            manifest_paths=set()
         )
 
         # Only extra_file.txt should be flagged

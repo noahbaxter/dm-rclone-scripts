@@ -6,10 +6,10 @@ Determines what files should be deleted (disabled drives, extra files, videos, p
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Set
 
 from ..core.constants import VIDEO_EXTENSIONS, CHART_ARCHIVE_EXTENSIONS
-from ..core.formatting import relative_posix, parent_posix
+from ..core.formatting import relative_posix, parent_posix, sanitize_path
 from .cache import scan_local_files
 from .state import SyncState
 
@@ -72,21 +72,25 @@ def find_partial_downloads(base_path: Path) -> List[Tuple[Path, int]]:
     return partial_files
 
 
-def find_extra_files_sync_state(
+def find_extra_files(
     folder_name: str,
     folder_path: Path,
-    sync_state: SyncState,
+    sync_state: Optional[SyncState],
+    manifest_paths: Set[str],
     local_files: dict = None,
 ) -> List[Tuple[Path, int]]:
     """
-    Find local files not tracked in sync_state.
+    Find local files not tracked in sync_state AND not in manifest.
 
-    This is the new simpler approach - anything on disk not in sync_state is extra.
+    A file is considered "extra" only if it's not in sync_state AND doesn't
+    match any manifest path. This allows files downloaded by other tools
+    (like rclone) to be recognized as valid if they match the manifest.
 
     Args:
-        folder_name: Name of the folder (for building sync state paths)
+        folder_name: Name of the folder (for building paths)
         folder_path: Path to the folder on disk
-        sync_state: SyncState instance with tracked files
+        sync_state: SyncState instance with tracked files (can be None)
+        manifest_paths: Set of sanitized manifest paths for this folder
         local_files: Optional pre-scanned local files dict
 
     Returns:
@@ -98,15 +102,23 @@ def find_extra_files_sync_state(
         return []
 
     # Get all tracked files from sync_state
-    tracked_files = sync_state.get_all_files()
+    tracked_files = sync_state.get_all_files() if sync_state else set()
 
-    # Find extras - files on disk not in sync_state
+    # Find extras - files on disk not in sync_state AND not in manifest
     extras = []
     for rel_path, size in local_files.items():
-        # Build the full sync_state path (folder_name/rel_path)
-        state_path = f"{folder_name}/{rel_path}"
-        if state_path not in tracked_files:
-            extras.append((folder_path / rel_path, size))
+        # Build the full path (folder_name/rel_path)
+        full_path = f"{folder_name}/{rel_path}"
+
+        # Check sync_state first
+        if full_path in tracked_files:
+            continue
+
+        # Check manifest (disk path should match sanitized manifest path)
+        if full_path in manifest_paths:
+            continue
+
+        extras.append((folder_path / rel_path, size))
 
     return extras
 
@@ -202,11 +214,26 @@ def plan_purge(
         # Add unique parent folders as estimated charts
         stats.estimated_charts += len(disabled_chart_parents)
 
-        # Extra files not tracked in sync_state
-        if sync_state:
-            extras = find_extra_files_sync_state(folder_name, folder_path, sync_state, local_files)
+        # Build set of valid manifest paths for this folder (enabled setlists only)
+        manifest_paths: Set[str] = set()
+        manifest_files = folder.get("files", [])
+        for f in manifest_files:
+            file_path = f.get("path", "")
+            # Skip files in disabled setlists
+            first_slash = file_path.find("/")
+            setlist_name = file_path[:first_slash] if first_slash != -1 else file_path
+            if setlist_name in disabled_setlists:
+                continue
+            # Add sanitized path (folder_name/sanitized_file_path)
+            sanitized = sanitize_path(file_path)
+            manifest_paths.add(f"{folder_name}/{sanitized}")
+
+        # Extra files not tracked in sync_state AND not in manifest
+        # Only detect extras if we have something to compare against (manifest or sync_state)
+        if manifest_paths or sync_state:
+            extras = find_extra_files(folder_name, folder_path, sync_state, manifest_paths, local_files)
         else:
-            extras = []  # No sync_state = can't determine extras
+            extras = []  # No manifest and no sync_state = can't determine extras
 
         extra_paths = set()
         for f, size in extras:

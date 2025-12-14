@@ -1,7 +1,7 @@
 """
-Tests for find_extra_files_sync_state.
+Tests for find_extra_files.
 
-Verifies that files tracked in sync_state aren't flagged as purgeable.
+Verifies that files tracked in sync_state or manifest aren't flagged as purgeable.
 """
 
 import tempfile
@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from src.sync import clear_cache
-from src.sync.purge_planner import find_extra_files_sync_state
+from src.sync.purge_planner import find_extra_files
 from src.sync.state import SyncState
 from src.sync.cache import scan_local_files
 
@@ -56,8 +56,8 @@ class TestSyncStateExtraFiles:
             }
         )
 
-        # Find extra files
-        extras = find_extra_files_sync_state(folder_name, folder_path, sync_state)
+        # Find extra files (no manifest paths)
+        extras = find_extra_files(folder_name, folder_path, sync_state, set())
 
         # Assert: tracked files should NOT be flagged as extra
         extra_names = [f.name for f, _ in extras]
@@ -66,7 +66,7 @@ class TestSyncStateExtraFiles:
         assert "song.ogg" not in extra_names, "song.ogg was incorrectly flagged as extra"
 
     def test_untracked_files_flagged_as_extra(self, temp_dir):
-        """Files not in sync_state should be flagged as extra."""
+        """Files not in sync_state or manifest should be flagged as extra."""
         folder_name = "TestDrive"
         folder_path = temp_dir / folder_name
         chart_folder = folder_path / "Setlist" / "SomeChart"
@@ -81,14 +81,14 @@ class TestSyncStateExtraFiles:
         sync_state.load()
         sync_state.add_file(f"{folder_name}/Setlist/SomeChart/song.ini", size=18)
 
-        extras = find_extra_files_sync_state(folder_name, folder_path, sync_state)
+        extras = find_extra_files(folder_name, folder_path, sync_state, set())
 
         extra_names = [f.name for f, _ in extras]
         assert "extra_file.txt" in extra_names, "Untracked file should be flagged"
         assert "song.ini" not in extra_names, "Tracked file should not be flagged"
 
-    def test_empty_sync_state_flags_all_files(self, temp_dir):
-        """With empty sync_state, all files should be flagged as extra."""
+    def test_empty_sync_state_flags_all_files_without_manifest(self, temp_dir):
+        """With empty sync_state and no manifest, all files should be flagged as extra."""
         folder_name = "TestDrive"
         folder_path = temp_dir / folder_name
         folder_path.mkdir(parents=True)
@@ -97,17 +97,55 @@ class TestSyncStateExtraFiles:
         (folder_path / "file1.txt").write_text("content1")
         (folder_path / "file2.txt").write_text("content2")
 
-        # Empty sync_state
+        # Empty sync_state, no manifest paths
         sync_state = SyncState(temp_dir)
         sync_state.load()
 
-        extras = find_extra_files_sync_state(folder_name, folder_path, sync_state)
+        extras = find_extra_files(folder_name, folder_path, sync_state, set())
 
-        assert len(extras) == 2, "All files should be extras with empty sync_state"
+        assert len(extras) == 2, "All files should be extras with empty sync_state and no manifest"
+
+    def test_manifest_paths_protect_files(self, temp_dir):
+        """Files in manifest should not be flagged as extra even without sync_state."""
+        folder_name = "TestDrive"
+        folder_path = temp_dir / folder_name
+        folder_path.mkdir(parents=True)
+
+        # Create files on disk
+        (folder_path / "in_manifest.txt").write_text("content1")
+        (folder_path / "not_in_manifest.txt").write_text("content2")
+
+        # Empty sync_state but one file is in manifest
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+
+        manifest_paths = {f"{folder_name}/in_manifest.txt"}
+        extras = find_extra_files(folder_name, folder_path, sync_state, manifest_paths)
+
+        extra_names = [f.name for f, _ in extras]
+        assert "in_manifest.txt" not in extra_names, "Manifest file should be protected"
+        assert "not_in_manifest.txt" in extra_names, "Non-manifest file should be flagged"
+
+    def test_no_sync_state_with_manifest(self, temp_dir):
+        """With no sync_state (None), manifest paths should still protect files."""
+        folder_name = "TestDrive"
+        folder_path = temp_dir / folder_name
+        folder_path.mkdir(parents=True)
+
+        # Create files on disk
+        (folder_path / "protected.txt").write_text("protected")
+        (folder_path / "extra.txt").write_text("extra")
+
+        manifest_paths = {f"{folder_name}/protected.txt"}
+        extras = find_extra_files(folder_name, folder_path, None, manifest_paths)
+
+        extra_names = [f.name for f, _ in extras]
+        assert len(extras) == 1
+        assert "extra.txt" in extra_names
 
 
 class TestFindExtraFilesWithCache:
-    """Tests for find_extra_files_sync_state when passed pre-scanned local_files."""
+    """Tests for find_extra_files when passed pre-scanned local_files."""
 
     @pytest.fixture
     def temp_dir(self):
@@ -116,7 +154,7 @@ class TestFindExtraFilesWithCache:
             yield Path(tmpdir)
 
     def test_with_explicit_local_files_param(self, temp_dir):
-        """find_extra_files_sync_state should work correctly when passed cached local_files."""
+        """find_extra_files should work correctly when passed cached local_files."""
         folder_name = "TestDrive"
         folder_path = temp_dir / folder_name
         folder_path.mkdir()
@@ -132,7 +170,7 @@ class TestFindExtraFilesWithCache:
 
         # Pre-scan and pass explicitly (the optimized path)
         local_files = _scan_local_files(folder_path)
-        extras = find_extra_files_sync_state(folder_name, folder_path, sync_state, local_files)
+        extras = find_extra_files(folder_name, folder_path, sync_state, set(), local_files)
 
         assert len(extras) == 1
         assert extras[0][0].name == "extra.txt"
@@ -146,7 +184,7 @@ class TestFindExtraFilesWithCache:
         sync_state = SyncState(temp_dir)
         sync_state.load()
 
-        extras = find_extra_files_sync_state(folder_name, folder_path, sync_state)
+        extras = find_extra_files(folder_name, folder_path, sync_state, set())
         assert extras == []
 
     def test_nonexistent_folder_returns_empty(self, temp_dir):
@@ -157,7 +195,7 @@ class TestFindExtraFilesWithCache:
         sync_state = SyncState(temp_dir)
         sync_state.load()
 
-        extras = find_extra_files_sync_state(folder_name, folder_path, sync_state)
+        extras = find_extra_files(folder_name, folder_path, sync_state, set())
         assert extras == []
 
 
