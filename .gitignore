@@ -34,8 +34,8 @@ manifest.json
 build/
 dist/
 *.spec
-dm-sync-macos
-dm-sync.exe
+synchotic-macos
+synchotic.exe
 
 # UnRAR library (built in CI)
 libs/

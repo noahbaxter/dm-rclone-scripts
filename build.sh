@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Build standalone executable for DM Chart Sync
+# Build standalone executable for Synchotic
 #
 # Usage:
 #   ./build.sh           Build for current platform
@@ -85,10 +85,10 @@ setup_venv() {
 build() {
     if [ "$PLATFORM" = "macos" ]; then
         echo_info "Building macOS executable..."
-        OUTPUT_NAME="dm-sync-macos"
+        OUTPUT_NAME="synchotic-macos"
     else
         echo_info "Building Windows executable..."
-        OUTPUT_NAME="dm-sync"
+        OUTPUT_NAME="synchotic"
     fi
 
     # Clean previous builds
