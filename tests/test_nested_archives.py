@@ -246,6 +246,106 @@ class TestNestedArchiveCounts:
             stats_module.get_overrides = original_get_overrides
 
 
+class TestNestedChartFolders:
+    """Tests for nested chart folders (chart folder containing other chart folders)."""
+
+    @pytest.fixture
+    def temp_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield Path(tmpdir)
+
+    def _create_chart_folder(self, path: Path, extra_files: dict = None):
+        """Create a minimal chart folder with markers and optional extra files."""
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "song.ini").write_text("[song]\nname=Test")
+        (path / "notes.mid").write_bytes(b"MThd")
+        if extra_files:
+            for name, content in extra_files.items():
+                (path / name).write_text(content)
+
+    def test_nested_charts_all_counted(self, temp_dir):
+        """
+        Chart folder containing other chart folders should count all charts.
+
+        Structure:
+        GameRip/
+          song.ini       <- makes this a chart (1)
+          Track01/
+            song.ini     <- nested chart (2)
+          Track02/
+            song.ini     <- nested chart (3)
+
+        Total should be 3, not 1.
+        """
+        from src.stats.local import LocalStatsScanner, clear_local_stats_cache
+
+        setlist_path = temp_dir / "GameRip"
+        self._create_chart_folder(setlist_path)  # Parent is a chart
+        self._create_chart_folder(setlist_path / "Track01")
+        self._create_chart_folder(setlist_path / "Track02")
+
+        clear_local_stats_cache()
+        scanner = LocalStatsScanner()
+        stats = scanner.get_setlist_stats(setlist_path)
+
+        assert stats.chart_count == 3
+
+    def test_non_chart_subdirs_size_included(self, temp_dir):
+        """
+        Non-chart subdirectories should have their size included in parent chart.
+
+        Structure:
+        Chart/
+          song.ini
+          Resources/
+            texture.png  <- should be included in Chart's size
+        """
+        from src.stats.local import LocalStatsScanner, clear_local_stats_cache
+
+        chart_path = temp_dir / "Chart"
+        self._create_chart_folder(chart_path)
+        resources = chart_path / "Resources"
+        resources.mkdir()
+        (resources / "texture.png").write_bytes(b"X" * 1000)
+
+        clear_local_stats_cache()
+        scanner = LocalStatsScanner()
+        stats = scanner.get_setlist_stats(chart_path)
+
+        assert stats.chart_count == 1
+        # Size should include song.ini + notes.mid + texture.png
+        assert stats.total_size > 1000  # At least the texture file
+
+    def test_nested_chart_sizes_separate(self, temp_dir):
+        """
+        Nested charts should have separate sizes (no double counting).
+
+        Structure:
+        Parent/
+          song.ini (100 bytes)
+          Child/
+            song.ini (50 bytes)
+
+        Parent size = 100, Child size = 50, total = 150 (not 200 from double counting)
+        """
+        from src.stats.local import LocalStatsScanner, clear_local_stats_cache
+
+        parent_path = temp_dir / "Parent"
+        parent_path.mkdir()
+        (parent_path / "song.ini").write_bytes(b"X" * 100)
+
+        child_path = parent_path / "Child"
+        child_path.mkdir()
+        (child_path / "song.ini").write_bytes(b"Y" * 50)
+
+        clear_local_stats_cache()
+        scanner = LocalStatsScanner()
+        stats = scanner.get_setlist_stats(parent_path)
+
+        assert stats.chart_count == 2
+        assert stats.total_size == 150  # 100 + 50, no double counting
+
+
 class TestLocalScanPriority:
     """Tests for local scan taking priority over everything."""
 
