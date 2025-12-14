@@ -9,7 +9,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..core.constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS
+from ..core.constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS, VIDEO_EXTENSIONS
 from ..core.formatting import sanitize_path, dedupe_files_by_newest
 from ..stats import get_best_stats
 from .cache import scan_local_files, scan_actual_charts
@@ -145,12 +145,18 @@ def _build_chart_folders(manifest_files: list) -> dict:
     return chart_folders
 
 
+def _is_video_file(path: str) -> bool:
+    """Check if a path is a video file."""
+    return Path(path).suffix.lower() in VIDEO_EXTENSIONS
+
+
 def _count_synced_charts(
     chart_folders: dict,
     local_files: dict,
     sync_state: SyncState,
     folder_name: str,
     skip_custom: bool = False,
+    delete_videos: bool = True,
 ) -> tuple[int, int, int, int]:
     """
     Count total and synced charts from chart_folders.
@@ -187,13 +193,25 @@ def _count_synced_charts(
             continue
 
         # Folder chart - check if all files exist locally
+        # When delete_videos=True, skip video files in sync check (they won't be downloaded)
+        files_to_check = data["files"]
+        if delete_videos:
+            files_to_check = [(fp, fs) for fp, fs in data["files"] if not _is_video_file(fp)]
+
         all_synced = all(
-            local_files.get(fp) == fs for fp, fs in data["files"]
+            local_files.get(fp) == fs for fp, fs in files_to_check
         )
+
+        # Calculate size excluding videos if delete_videos is enabled
+        if delete_videos:
+            chart_size = sum(fs for fp, fs in data["files"] if not _is_video_file(fp))
+        else:
+            chart_size = data["total_size"]
+
         if all_synced:
             synced_charts += 1
-            synced_size += data["total_size"]
-        total_size += data["total_size"]
+            synced_size += chart_size
+        total_size += chart_size
 
     return total_charts, synced_charts, total_size, synced_size
 
@@ -337,9 +355,12 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None, sync_sta
         local_files = scan_local_files(folder_path)
 
         # Count charts and check sync status
+        # Get delete_videos setting (default True if no settings)
+        delete_videos = user_settings.delete_videos if user_settings else True
         total, synced, total_size, synced_size = _count_synced_charts(
             chart_folders, local_files, sync_state, folder_name,
-            skip_custom=(synced_from_scan is not None)
+            skip_custom=(synced_from_scan is not None),
+            delete_videos=delete_videos,
         )
         status.total_charts += total
         status.synced_charts += synced

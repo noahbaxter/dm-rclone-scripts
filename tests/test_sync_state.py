@@ -297,5 +297,69 @@ class TestPurgePlannerWithSyncState:
         assert "song.ini" not in extra_names
 
 
+class TestStatusMatchesDownloadPlanner:
+    """
+    Integration test: status and download_planner must agree.
+
+    The bug was status showing +466.6 MB while download said "all synced".
+    This happened because status counted missing videos but download skipped them.
+    """
+
+    @pytest.fixture
+    def temp_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield Path(tmpdir)
+
+    def test_status_and_download_agree_on_missing_videos(self, temp_dir):
+        """
+        When delete_videos=True and only video files are missing,
+        both status and download_planner should agree: nothing to download.
+        """
+        from src.sync.download_planner import plan_downloads
+
+        folder_path = temp_dir / "TestDrive" / "Setlist" / "ChartFolder"
+        folder_path.mkdir(parents=True)
+
+        # Create non-video files on disk (video is missing)
+        (folder_path / "song.ini").write_text("[song]")
+        (folder_path / "notes.mid").write_bytes(b"midi")
+
+        manifest_files = [
+            {"id": "1", "path": "Setlist/ChartFolder/song.ini", "size": 6, "md5": "a"},
+            {"id": "2", "path": "Setlist/ChartFolder/notes.mid", "size": 4, "md5": "b"},
+            {"id": "3", "path": "Setlist/ChartFolder/video.webm", "size": 1000000, "md5": "c"},
+        ]
+
+        folder = {
+            "folder_id": "test123",
+            "name": "TestDrive",
+            "files": manifest_files,
+        }
+
+        class MockSettings:
+            delete_videos = True
+            def is_drive_enabled(self, folder_id):
+                return True
+            def get_disabled_subfolders(self, folder_id):
+                return set()
+
+        # What does status say?
+        status = get_sync_status([folder], temp_dir, MockSettings(), None)
+
+        # What does download_planner say?
+        tasks, skipped, _ = plan_downloads(
+            manifest_files,
+            temp_dir / "TestDrive",
+            delete_videos=True,
+            sync_state=None,
+            folder_name="TestDrive",
+        )
+
+        # They must agree: nothing to download
+        assert status.missing_charts == 0, "Status says charts missing"
+        assert len(tasks) == 0, "Download planner has tasks"
+        assert status.synced_charts == status.total_charts
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
