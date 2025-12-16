@@ -126,7 +126,8 @@ class TestNestedArchiveCounts:
         sync_state.load()
         extracted_files = {}
         for i in range(5):
-            extracted_files[f"Song {i}/song.ini"] = 20
+            # Sizes must match actual files: "[song]\nname=Test" = 16 bytes, "MThd" = 4 bytes
+            extracted_files[f"Song {i}/song.ini"] = 16
             extracted_files[f"Song {i}/notes.mid"] = 4
         sync_state.add_archive(
             "GameRips/PackA/pack.7z",
@@ -244,6 +245,68 @@ class TestNestedArchiveCounts:
             assert status.synced_charts == 13
         finally:
             stats_module.get_overrides = original_get_overrides
+
+
+class TestCacheNestedChartScanning:
+    """
+    Bug #4 regression tests: cache.py scan_for_charts must handle nested charts.
+
+    src/sync/cache.py has its own scan_for_charts() that was buggy - it only
+    recursed into subdirs when NO marker was found. This meant nested charts
+    (a chart folder containing other chart folders) were undercounted.
+    """
+
+    @pytest.fixture
+    def temp_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield Path(tmpdir)
+
+    def _create_chart_folder(self, path: Path):
+        """Create a minimal chart folder with markers."""
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "song.ini").write_text("[song]\nname=Test")
+        (path / "notes.mid").write_bytes(b"MThd")
+
+    def test_cache_scan_nested_charts(self, temp_dir):
+        """
+        Bug #4 regression test: cache.py must count nested charts.
+
+        Structure:
+        GameRip/
+          song.ini       <- makes this a chart (1)
+          Track01/
+            song.ini     <- nested chart (2)
+          Track02/
+            song.ini     <- nested chart (3)
+
+        Total should be 3, not 1.
+        """
+        from src.sync.cache import _scan_actual_charts_uncached
+
+        setlist_path = temp_dir / "GameRip"
+        self._create_chart_folder(setlist_path)  # Parent is a chart
+        self._create_chart_folder(setlist_path / "Track01")
+        self._create_chart_folder(setlist_path / "Track02")
+
+        count, size = _scan_actual_charts_uncached(setlist_path)
+
+        assert count == 3, f"Expected 3 charts (parent + 2 nested), got {count}"
+
+    def test_cache_scan_deeply_nested_charts(self, temp_dir):
+        """Cache scan handles deeply nested chart structures."""
+        from src.sync.cache import _scan_actual_charts_uncached
+
+        # Album / Disc1 / Track01 - each level is a chart
+        base = temp_dir / "Album"
+        self._create_chart_folder(base)
+        self._create_chart_folder(base / "Disc1")
+        self._create_chart_folder(base / "Disc1" / "Track01")
+        self._create_chart_folder(base / "Disc1" / "Track02")
+        self._create_chart_folder(base / "Disc2")
+
+        count, size = _scan_actual_charts_uncached(base)
+
+        assert count == 5, f"Expected 5 charts, got {count}"
 
 
 class TestNestedChartFolders:

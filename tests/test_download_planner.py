@@ -142,6 +142,34 @@ class TestPlanDownloadsArchives:
         )
         assert len(tasks) == 1  # Extracted files missing, need to re-download
 
+    def test_archive_redownloaded_when_extracted_file_size_wrong(self, temp_dir):
+        """
+        Bug #9 regression test: archive extracted files exist but have wrong size.
+
+        sync_state tracks extracted files with their sizes. If disk size differs
+        (file corrupted, modified, or extraction was incomplete), should re-download.
+        """
+        # Create extracted file with WRONG size
+        (temp_dir / "TestDrive" / "folder").mkdir(parents=True)
+        (temp_dir / "TestDrive" / "folder" / "song.ini").write_text("short")  # 5 bytes
+
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+        sync_state.add_archive(
+            "TestDrive/folder/chart.7z",
+            md5="abc123",
+            archive_size=1000,
+            files={"song.ini": 100}  # sync_state says 100 bytes, disk has 5
+        )
+
+        files = [{"id": "1", "path": "folder/chart.7z", "size": 1000, "md5": "abc123"}]
+        tasks, skipped, _ = plan_downloads(
+            files, temp_dir, sync_state=sync_state, folder_name="TestDrive"
+        )
+
+        # Should re-download because extracted file size is wrong
+        assert len(tasks) == 1, "Should re-download when extracted file size differs"
+
 
 class TestPlanDownloadsRegularFiles:
     """Tests for regular (non-archive) file handling."""
@@ -196,6 +224,34 @@ class TestPlanDownloadsRegularFiles:
         )
         assert len(tasks) == 0
         assert skipped == 1
+
+    def test_sync_state_disk_size_mismatch_triggers_download(self, temp_dir):
+        """
+        Bug #9 regression test: sync_state says synced but disk size differs.
+
+        This catches the case where a file was downloaded, then modified locally
+        (or extracted with wrong size). sync_state thinks it's synced, but disk
+        size doesn't match manifest - should re-download.
+        """
+        # Create file on disk with DIFFERENT size than manifest expects
+        local_file = temp_dir / "folder" / "song.ini"
+        local_file.parent.mkdir(parents=True)
+        local_file.write_text("modified content here")  # 21 bytes
+
+        # sync_state says we downloaded it with manifest's expected size
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+        sync_state.add_file("TestDrive/folder/song.ini", size=100)  # recorded size
+
+        # Manifest says file should be 100 bytes
+        files = [{"id": "1", "path": "folder/song.ini", "size": 100, "md5": "abc"}]
+        tasks, skipped, _ = plan_downloads(
+            files, temp_dir, sync_state=sync_state, folder_name="TestDrive"
+        )
+
+        # Should re-download because disk size (21) != manifest size (100)
+        assert len(tasks) == 1, "Should re-download when disk size differs from manifest"
+        assert skipped == 0
 
 
 class TestPlanDownloadsPathSanitization:
