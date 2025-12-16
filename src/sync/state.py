@@ -156,12 +156,14 @@ class SyncState:
         """Get all tracked file paths (for purge planning)."""
         return set(self._files.keys())
 
-    def check_files_exist(self, paths: list = None) -> list:
+    def check_files_exist(self, paths: list = None, verify_sizes: bool = True) -> list:
         """
-        Return list of tracked files that don't exist on disk.
+        Return list of tracked files that are missing or have wrong size.
 
         Args:
             paths: Optional list of paths to check. If None, checks all files.
+            verify_sizes: If True, also verify disk size matches recorded size.
+                         Files modified after download/extraction will be flagged.
         """
         if paths is None:
             paths = self._files.keys()
@@ -171,6 +173,17 @@ class SyncState:
             full_path = self.sync_root / path
             if not full_path.exists():
                 missing.append(path)
+            elif verify_sizes:
+                # Check size matches what we recorded
+                recorded = self._files.get(path)
+                if recorded:
+                    expected_size = recorded.get("size", 0)
+                    try:
+                        actual_size = full_path.stat().st_size
+                        if actual_size != expected_size:
+                            missing.append(path)
+                    except OSError:
+                        missing.append(path)
         return missing
 
     # --- Archive operations (O(1) via flat cache) ---

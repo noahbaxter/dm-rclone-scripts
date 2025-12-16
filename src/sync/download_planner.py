@@ -127,8 +127,9 @@ def plan_downloads(
             if sync_state:
                 # Use sync_state for checking
                 if sync_state.is_file_synced(rel_path, file_size):
-                    # Also verify file exists on disk
-                    is_synced = local_path.exists()
+                    # Also verify file exists on disk with matching size
+                    # (file may have been modified after download)
+                    is_synced = file_exists_with_size(local_path, file_size)
             else:
                 # Fall back to size check
                 is_synced = file_exists_with_size(local_path, file_size)
