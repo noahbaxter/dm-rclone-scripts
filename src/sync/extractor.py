@@ -57,6 +57,43 @@ except ImportError:
 CHECKSUM_FILE = "check.txt"
 
 
+def fix_permissions(folder_path: Path) -> int:
+    """
+    Recursively fix read-only folders to be writable.
+
+    Some archives (especially RAR) preserve restrictive Unix permissions (555).
+    This causes issues with moving/deleting extracted content.
+
+    Returns count of folders fixed.
+    """
+    import stat
+    fixed = 0
+    try:
+        for root, dirs, files in os.walk(folder_path):
+            for d in dirs:
+                dp = Path(root) / d
+                try:
+                    mode = dp.stat().st_mode
+                    # Add write permission for owner if missing
+                    if not (mode & stat.S_IWUSR):
+                        dp.chmod(mode | stat.S_IWUSR)
+                        fixed += 1
+                except (OSError, PermissionError):
+                    pass
+            # Also fix files that might be read-only
+            for f in files:
+                fp = Path(root) / f
+                try:
+                    mode = fp.stat().st_mode
+                    if not (mode & stat.S_IWUSR):
+                        fp.chmod(mode | stat.S_IWUSR)
+                except (OSError, PermissionError):
+                    pass
+    except Exception:
+        pass
+    return fixed
+
+
 def extract_archive(archive_path: Path, dest_folder: Path) -> Tuple[bool, str]:
     """
     Extract archive using Python libraries.
@@ -73,21 +110,22 @@ def extract_archive(archive_path: Path, dest_folder: Path) -> Tuple[bool, str]:
         if ext == ".zip":
             with zipfile.ZipFile(archive_path, 'r') as zf:
                 zf.extractall(dest_folder)
-            return True, ""
         elif ext == ".7z":
             if not HAS_7Z:
                 return False, "py7zr library not available"
             with py7zr.SevenZipFile(archive_path, 'r') as sz:
                 sz.extractall(dest_folder)
-            return True, ""
         elif ext == ".rar":
             if not HAS_RAR_LIB:
                 return False, "rarfile library not available"
             with rarfile.RarFile(str(archive_path)) as rf:
                 rf.extractall(str(dest_folder))
-            return True, ""
         else:
             return False, f"Unsupported archive format: {ext}"
+
+        # Fix permissions on extracted content (some archives have read-only folders)
+        fix_permissions(dest_folder)
+        return True, ""
     except Exception as e:
         return False, str(e)
 
