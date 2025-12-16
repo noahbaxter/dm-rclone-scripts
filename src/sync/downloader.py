@@ -540,10 +540,14 @@ class FileDownloader:
         progress_callback: Optional[Callable[[DownloadResult], None]] = None,
         show_progress: bool = True,
         sync_state: Optional[SyncState] = None,
-    ) -> Tuple[int, int, int, int, bool]:
-        """Download multiple files concurrently using asyncio."""
+    ) -> Tuple[int, int, int, List[str], bool]:
+        """Download multiple files concurrently using asyncio.
+
+        Returns:
+            Tuple of (downloaded, skipped, errors, rate_limited_file_ids, cancelled)
+        """
         if not tasks:
-            return 0, 0, 0, 0, False
+            return 0, 0, 0, [], False
 
         progress = None
         if show_progress:
@@ -572,17 +576,17 @@ class FileDownloader:
         esc_monitor.start()
 
         auth_failures = 0
+        rate_limited_ids: List[str] = []
         try:
             downloaded, errors, retryable, auth_failures, cancelled = asyncio.run(
                 self._download_many_async(tasks, progress, progress_callback, sync_state)
             )
-            rate_limited = len(retryable)
-            permanent_errors = errors - rate_limited
+            rate_limited_ids = [t.file_id for t in retryable]
+            permanent_errors = errors - len(retryable)
         except KeyboardInterrupt:
             cancelled = True
             downloaded = 0
             permanent_errors = 0
-            rate_limited = 0
         finally:
             esc_monitor.stop()
 
@@ -599,7 +603,7 @@ class FileDownloader:
                     if cleaned > 0:
                         print(f"  Cleaned up {cleaned} partial download(s).")
 
-        if auth_failures > 0 and rate_limited == 0:
+        if auth_failures > 0 and len(rate_limited_ids) == 0:
             print()
             print(f"  ⚠ {auth_failures} files failed due to access restrictions.")
             print()
@@ -615,4 +619,4 @@ class FileDownloader:
             print("  Ask the owner to set sharing to 'Anyone with the link' for public access.")
             print()
 
-        return downloaded, 0, permanent_errors, rate_limited, cancelled
+        return downloaded, 0, permanent_errors, rate_limited_ids, cancelled

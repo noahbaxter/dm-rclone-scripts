@@ -40,8 +40,9 @@ class FolderSync:
         self,
         folder: dict,
         base_path: Path,
-        disabled_prefixes: list[str] = None
-    ) -> tuple[int, int, int, int, bool]:
+        disabled_prefixes: list[str] = None,
+        skip_file_ids: set[str] = None
+    ) -> tuple[int, int, int, list[str], bool]:
         """
         Sync a folder to local disk.
 
@@ -49,8 +50,10 @@ class FolderSync:
             folder: Folder dict from manifest
             base_path: Base download path
             disabled_prefixes: List of path prefixes to exclude (disabled subfolders)
+            skip_file_ids: Set of file IDs to skip (e.g., permanently rate-limited)
 
-        Returns (downloaded, skipped, errors, rate_limited, cancelled).
+        Returns:
+            Tuple of (downloaded, skipped, errors, rate_limited_file_ids, cancelled)
         """
         folder_path = base_path / folder["name"]
         scan_start = time.time()
@@ -117,11 +120,17 @@ class FolderSync:
 
         if not tasks and not skipped:
             print(f"  No files found or error accessing folder")
-            return 0, 0, 1, 0, False
+            return 0, 0, 1, [], False
+
+        # Filter out permanently skipped files (e.g., exceeded retry limit)
+        if skip_file_ids:
+            original_count = len(tasks)
+            tasks = [t for t in tasks if t.file_id not in skip_file_ids]
+            skipped += original_count - len(tasks)
 
         if not tasks:
             print(f"  All {skipped} files already downloaded")
-            return 0, skipped, 0, 0, False
+            return 0, skipped, 0, [], False
 
         total_size = sum(t.size for t in tasks)
         print(f"  Found {len(tasks)} files to download ({format_size(total_size)}), {skipped} already exist")
@@ -154,6 +163,7 @@ class FolderSync:
 
         Automatically retries rate-limited files by re-running the sync
         (which skips already-downloaded files) until everything succeeds.
+        Files that fail 3+ times are skipped and reported at the end.
 
         Args:
             folders: List of folder dicts from manifest
@@ -176,11 +186,16 @@ class FolderSync:
         total_errors = 0
         was_cancelled = False
         retry_round = 0
-        max_retries = 10  # Safety limit
+        max_retries = 10  # Safety limit for total retry rounds
+        max_per_file_retries = 3  # Skip files after this many failures
+
+        # Track per-file retry counts: {file_id: retry_count}
+        file_retry_counts: dict[str, int] = {}
+        permanently_skipped: set[str] = set()
 
         while retry_round <= max_retries:
             round_downloaded = 0
-            round_rate_limited = 0
+            round_rate_limited_ids: list[str] = []
 
             for idx in indices:
                 folder = folders[idx]
@@ -194,12 +209,12 @@ class FolderSync:
                 folder_id = folder.get("folder_id", "")
                 disabled_prefixes = disabled_prefixes_map.get(folder_id, [])
 
-                downloaded, skipped, errors, rate_limited, cancelled = self.sync_folder(
-                    folder, download_path, disabled_prefixes
+                downloaded, skipped, errors, rate_limited_ids, cancelled = self.sync_folder(
+                    folder, download_path, disabled_prefixes, skip_file_ids=permanently_skipped
                 )
 
                 round_downloaded += downloaded
-                round_rate_limited += rate_limited
+                round_rate_limited_ids.extend(rate_limited_ids)
                 total_downloaded += downloaded
                 total_skipped += skipped
                 total_errors += errors
@@ -208,19 +223,33 @@ class FolderSync:
                     was_cancelled = True
                     break
 
-                if rate_limited > 0:
-                    print(f"  Downloaded: {downloaded}, Skipped: {skipped}, Errors: {errors}, Rate-limited: {rate_limited}")
+                if len(rate_limited_ids) > 0:
+                    print(f"  Downloaded: {downloaded}, Skipped: {skipped}, Errors: {errors}, Rate-limited: {len(rate_limited_ids)}")
                 else:
                     print(f"  Downloaded: {downloaded}, Skipped: {skipped}, Errors: {errors}")
 
             if was_cancelled:
                 break
 
-            # If we had rate-limited files, wait and retry
-            if round_rate_limited > 0:
+            # Update per-file retry counts and check for files to permanently skip
+            new_permanent_skips = []
+            for file_id in round_rate_limited_ids:
+                file_retry_counts[file_id] = file_retry_counts.get(file_id, 0) + 1
+                if file_retry_counts[file_id] >= max_per_file_retries:
+                    permanently_skipped.add(file_id)
+                    new_permanent_skips.append(file_id)
+
+            if new_permanent_skips:
+                print(f"\n  Skipping {len(new_permanent_skips)} file(s) after {max_per_file_retries} failed attempts")
+
+            # Count files still needing retry (not permanently skipped)
+            still_rate_limited = [fid for fid in round_rate_limited_ids if fid not in permanently_skipped]
+
+            # If we had rate-limited files that aren't permanently skipped, wait and retry
+            if still_rate_limited:
                 retry_round += 1
                 wait_time = min(60, 15 + retry_round * 10)  # 25s, 35s, 45s, ... up to 60s
-                print(f"\n  {round_rate_limited} files were rate-limited. Waiting {wait_time}s before retry...")
+                print(f"\n  {len(still_rate_limited)} files were rate-limited. Waiting {wait_time}s before retry...")
                 print("  (Press Ctrl+C to cancel)")
                 try:
                     time.sleep(wait_time)
@@ -229,7 +258,7 @@ class FolderSync:
                     print("\n  Cancelled.")
                     break
             else:
-                # No rate limiting, we're done
+                # No more files to retry, we're done
                 break
 
         if was_cancelled:
@@ -241,9 +270,17 @@ class FolderSync:
         print(f"  Total downloaded: {total_downloaded}")
         print(f"  Total skipped (already exists): {total_skipped}")
         print(f"  Total errors: {total_errors}")
+        if permanently_skipped:
+            print(f"  Skipped due to rate limits: {len(permanently_skipped)}")
         if retry_round > 0:
             print(f"  Retry rounds needed: {retry_round}")
         print("=" * 50)
+
+        # Report permanently skipped files
+        if permanently_skipped:
+            print()
+            print(f"  {len(permanently_skipped)} file(s) were skipped after repeated rate limiting.")
+            print("  These files will be retried on the next sync.")
 
         # Auto-dismiss after 2 seconds (any key skips)
         wait_with_skip(2)
@@ -279,6 +316,7 @@ def purge_all_folders(
     print("=" * 50)
 
     total_deleted = 0
+    total_failed = 0
     total_size = 0
 
     for folder in folders:
@@ -301,10 +339,11 @@ def purge_all_folders(
                 print(f"\n[{folder_name}] (drive disabled)")
                 print(f"  Found {len(local_files)} files ({format_size(folder_size)})")
 
-                deleted = delete_files(local_files, base_path)
+                deleted, failed = delete_files(local_files, base_path)
                 total_deleted += deleted
+                total_failed += failed
                 total_size += folder_size
-                print(f"  Removed {deleted} files")
+                print(f"  Removed {deleted} files" + (f" ({failed} failed)" if failed else ""))
             continue
 
         # Drive is enabled - use plan_purge to get files
@@ -325,10 +364,11 @@ def purge_all_folders(
             print(f"    ... and {len(tree_lines) - 5} more folders")
 
         # Delete automatically
-        deleted = delete_files(files_to_purge, base_path)
+        deleted, failed = delete_files(files_to_purge, base_path)
         total_deleted += deleted
+        total_failed += failed
         total_size += folder_size
-        print(f"  Removed {deleted} files")
+        print(f"  Removed {deleted} files" + (f" ({failed} failed)" if failed else ""))
 
     # Clean up partial downloads at base level
     partial_files = find_partial_downloads(base_path)
@@ -336,14 +376,18 @@ def purge_all_folders(
         partial_size = sum(size for _, size in partial_files)
         print(f"\n[Partial Downloads]")
         print(f"  Found {len(partial_files)} incomplete download(s) ({format_size(partial_size)})")
-        deleted = delete_files(partial_files, base_path)
+        deleted, failed = delete_files(partial_files, base_path)
         total_deleted += deleted
+        total_failed += failed
         total_size += partial_size
-        print(f"  Cleaned up {deleted} file(s)")
+        print(f"  Cleaned up {deleted} file(s)" + (f" ({failed} failed)" if failed else ""))
 
     print()
-    if total_deleted > 0:
-        print(f"Total: Removed {total_deleted} files ({format_size(total_size)})")
+    if total_deleted > 0 or total_failed > 0:
+        msg = f"Total: Removed {total_deleted} files ({format_size(total_size)})"
+        if total_failed > 0:
+            msg += f"\n  {total_failed} file(s) could not be deleted (permission errors)"
+        print(msg)
     else:
         print("No files to purge.")
 
