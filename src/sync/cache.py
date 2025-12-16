@@ -142,43 +142,44 @@ def _scan_actual_charts_uncached(folder_path: Path) -> tuple[int, int]:
     total_size = 0
     chart_markers = {"song.ini", "notes.mid", "notes.chart"}
 
-    def get_dir_size(dir_path: Path) -> int:
-        size = 0
-        try:
-            with os.scandir(dir_path) as entries:
-                for entry in entries:
-                    if entry.is_file(follow_symlinks=False):
-                        try:
-                            size += entry.stat(follow_symlinks=False).st_size
-                        except OSError:
-                            pass
-                    elif entry.is_dir(follow_symlinks=False):
-                        size += get_dir_size(Path(entry.path))
-        except OSError:
-            pass
-        return size
-
-    def scan_for_charts(dir_path: Path):
+    def scan_for_charts(dir_path: Path) -> int:
+        """
+        Recursively scan for chart folders, including nested charts.
+        Returns: size of non-chart content for parent to include.
+        """
         nonlocal chart_count, total_size
         try:
             has_marker = False
+            subdirs = []
+            direct_size = 0
+
             with os.scandir(dir_path) as entries:
-                subdirs = []
                 for entry in entries:
                     if entry.is_file(follow_symlinks=False):
                         if entry.name.lower() in chart_markers:
                             has_marker = True
+                        try:
+                            direct_size += entry.stat(follow_symlinks=False).st_size
+                        except OSError:
+                            pass
                     elif entry.is_dir(follow_symlinks=False):
                         subdirs.append(Path(entry.path))
 
-                if has_marker:
-                    chart_count += 1
-                    total_size += get_dir_size(dir_path)
-                else:
-                    for subdir in subdirs:
-                        scan_for_charts(subdir)
+            # Recurse into ALL subdirs first (before checking has_marker)
+            subdir_non_chart_size = 0
+            for subdir in subdirs:
+                subdir_non_chart_size += scan_for_charts(subdir)
+
+            if has_marker:
+                # This folder is a chart - include direct files + non-chart subdirs
+                chart_count += 1
+                total_size += direct_size + subdir_non_chart_size
+                return 0  # Chart content doesn't bubble up to parent
+            else:
+                # Not a chart - return size for parent to potentially include
+                return direct_size + subdir_non_chart_size
         except OSError:
-            pass
+            return 0
 
     scan_for_charts(folder_path)
     return chart_count, total_size
