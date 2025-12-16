@@ -34,8 +34,9 @@ class TestNestedArchiveCounts:
     def _create_chart_folder(self, path: Path):
         """Create a minimal chart folder with markers."""
         path.mkdir(parents=True, exist_ok=True)
-        (path / "song.ini").write_text("[song]\nname=Test")
-        (path / "notes.mid").write_bytes(b"MThd")
+        # Use write_bytes to ensure consistent size across platforms (no CRLF conversion)
+        (path / "song.ini").write_bytes(b"[song]\nname=Test")  # 16 bytes
+        (path / "notes.mid").write_bytes(b"MThd")  # 4 bytes
 
     def test_manifest_counts_one_archive_as_one_chart(self, temp_dir):
         """Without adjustments, manifest counts 1 archive = 1 chart."""
@@ -264,8 +265,9 @@ class TestCacheNestedChartScanning:
     def _create_chart_folder(self, path: Path):
         """Create a minimal chart folder with markers."""
         path.mkdir(parents=True, exist_ok=True)
-        (path / "song.ini").write_text("[song]\nname=Test")
-        (path / "notes.mid").write_bytes(b"MThd")
+        # Use write_bytes to ensure consistent size across platforms (no CRLF conversion)
+        (path / "song.ini").write_bytes(b"[song]\nname=Test")  # 16 bytes
+        (path / "notes.mid").write_bytes(b"MThd")  # 4 bytes
 
     def test_cache_scan_nested_charts(self, temp_dir):
         """
@@ -320,11 +322,12 @@ class TestNestedChartFolders:
     def _create_chart_folder(self, path: Path, extra_files: dict = None):
         """Create a minimal chart folder with markers and optional extra files."""
         path.mkdir(parents=True, exist_ok=True)
-        (path / "song.ini").write_text("[song]\nname=Test")
+        # Use write_bytes to ensure consistent size across platforms (no CRLF conversion)
+        (path / "song.ini").write_bytes(b"[song]\nname=Test")
         (path / "notes.mid").write_bytes(b"MThd")
         if extra_files:
             for name, content in extra_files.items():
-                (path / name).write_text(content)
+                (path / name).write_bytes(content.encode())
 
     def test_nested_charts_all_counted(self, temp_dir):
         """
@@ -419,7 +422,8 @@ class TestLocalScanPriority:
 
     def _create_chart_folder(self, path: Path):
         path.mkdir(parents=True, exist_ok=True)
-        (path / "song.ini").write_text("[song]\nname=Test")
+        # Use write_bytes to ensure consistent size across platforms (no CRLF conversion)
+        (path / "song.ini").write_bytes(b"[song]\nname=Test")
         (path / "notes.mid").write_bytes(b"MThd")
 
     def test_local_scan_beats_override(self, temp_dir):
