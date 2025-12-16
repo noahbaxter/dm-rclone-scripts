@@ -99,6 +99,7 @@ class Manifest:
     - generated: ISO timestamp of last generation
     - changes_token: Page token for Changes API (incremental updates)
     - folders: List of folder entries with their files
+    - shortcut_folders: Dict tracking external shortcuts for incremental updates
     """
 
     VERSION = "2.0.0"
@@ -115,6 +116,9 @@ class Manifest:
         self.generated: Optional[str] = None
         self.changes_token: Optional[str] = None
         self.folders: list[FolderEntry] = []
+        # Track external shortcut folders for incremental updates
+        # Key: shortcut ID, Value: {target_id, name, parent_folder_id, last_modified}
+        self.shortcut_folders: dict[str, dict] = {}
 
     @classmethod
     def load(cls, path: Path) -> "Manifest":
@@ -140,6 +144,7 @@ class Manifest:
                 manifest.folders = [
                     FolderEntry.from_dict(f) for f in data.get("folders", [])
                 ]
+                manifest.shortcut_folders = data.get("shortcut_folders", {})
             except (json.JSONDecodeError, IOError):
                 pass
 
@@ -158,18 +163,23 @@ class Manifest:
             "changes_token": self.changes_token,
             "folders": [f.to_dict() for f in self.folders],
         }
+        if self.shortcut_folders:
+            data["shortcut_folders"] = self.shortcut_folders
 
         with open(self.path, "w") as f:
             json.dump(data, f, indent=2)
 
     def to_dict(self) -> dict:
         """Convert manifest to dictionary."""
-        return {
+        result = {
             "version": self.version,
             "generated": self.generated,
             "changes_token": self.changes_token,
             "folders": [f.to_dict() for f in self.folders],
         }
+        if self.shortcut_folders:
+            result["shortcut_folders"] = self.shortcut_folders
+        return result
 
     def get_folder(self, folder_id: str) -> Optional[FolderEntry]:
         """Get folder by ID."""

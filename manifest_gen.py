@@ -219,6 +219,182 @@ def generate_full(force_rescan: bool = False):
 
 
 # ============================================================================
+# Shortcut Folder Tracking
+# ============================================================================
+
+SHORTCUT_MIME = "application/vnd.google-apps.shortcut"
+FOLDER_MIME = "application/vnd.google-apps.folder"
+
+
+def find_shortcuts_in_folder(client: DriveClient, folder_id: str) -> list[dict]:
+    """
+    Find all shortcut folders in a folder's immediate children.
+
+    Returns list of {shortcut_id, target_id, name}
+    """
+    shortcuts = []
+    items = client.list_folder(folder_id)
+
+    for item in items:
+        if item.get("mimeType") == SHORTCUT_MIME:
+            details = item.get("shortcutDetails", {})
+            target_mime = details.get("targetMimeType", "")
+            # Only track shortcuts to folders
+            if target_mime == FOLDER_MIME:
+                shortcuts.append({
+                    "shortcut_id": item.get("id"),
+                    "target_id": details.get("targetId"),
+                    "name": item.get("name"),
+                })
+
+    return shortcuts
+
+
+def check_shortcut_folders(
+    client: DriveClient,
+    manifest: Manifest,
+    root_folders: list[dict],
+) -> list[dict]:
+    """
+    Check all shortcut folders for changes.
+
+    Returns list of shortcuts that need rescanning:
+    [{shortcut_id, target_id, name, parent_folder_id, parent_name}]
+    """
+    changed = []
+
+    for folder_info in root_folders:
+        folder_id = folder_info["folder_id"]
+        folder_name = folder_info["name"]
+
+        # Find shortcuts in this folder
+        shortcuts = find_shortcuts_in_folder(client, folder_id)
+
+        for sc in shortcuts:
+            shortcut_id = sc["shortcut_id"]
+            target_id = sc["target_id"]
+
+            # Get target folder's current modifiedTime
+            target_meta = client.get_file_metadata(
+                target_id,
+                fields="id,modifiedTime"
+            )
+            if not target_meta:
+                continue
+
+            current_modified = target_meta.get("modifiedTime", "")
+
+            # Check if we have this shortcut tracked
+            stored = manifest.shortcut_folders.get(shortcut_id)
+
+            if stored:
+                # Already tracked - check if modified since last scan
+                stored_modified = stored.get("last_modified", "")
+                if current_modified != stored_modified:
+                    changed.append({
+                        "shortcut_id": shortcut_id,
+                        "target_id": target_id,
+                        "name": sc["name"],
+                        "parent_folder_id": folder_id,
+                        "parent_name": folder_name,
+                        "current_modified": current_modified,
+                    })
+            # If not tracked yet, just record it (don't trigger rescan)
+
+            # Update stored info (even if not changed, ensures we track all)
+            manifest.shortcut_folders[shortcut_id] = {
+                "target_id": target_id,
+                "name": sc["name"],
+                "parent_folder_id": folder_id,
+                "last_modified": current_modified,
+            }
+
+    return changed
+
+
+def rescan_shortcut_folder(
+    client: DriveClient,
+    scanner: FolderScanner,
+    manifest: Manifest,
+    shortcut_info: dict,
+) -> tuple[int, int, int]:
+    """
+    Rescan a single shortcut folder and update manifest.
+
+    Returns (added, modified, removed) counts.
+    """
+    target_id = shortcut_info["target_id"]
+    shortcut_name = shortcut_info["name"]
+    parent_folder_id = shortcut_info["parent_folder_id"]
+
+    # Get the parent folder entry from manifest
+    parent_folder = manifest.get_folder(parent_folder_id)
+    if not parent_folder:
+        return 0, 0, 0
+
+    # Build prefix path for files under this shortcut
+    prefix = shortcut_name
+
+    # Scan the target folder
+    result = scanner.scan(target_id, prefix)
+
+    # Build lookup of existing files under this shortcut path
+    existing_paths = {}
+    for i, f in enumerate(parent_folder.files):
+        path = f.get("path") if isinstance(f, dict) else f.path
+        if path.startswith(prefix + "/") or path == prefix:
+            existing_paths[path] = i
+
+    # Track changes
+    added = 0
+    modified = 0
+    new_files = []
+    seen_paths = set()
+
+    for new_file in result.files:
+        path = new_file.get("path", "")
+        seen_paths.add(path)
+
+        if path in existing_paths:
+            # Check if modified
+            old_idx = existing_paths[path]
+            old_file = parent_folder.files[old_idx]
+            old_md5 = old_file.get("md5") if isinstance(old_file, dict) else old_file.md5
+            new_md5 = new_file.get("md5", "")
+
+            if old_md5 != new_md5:
+                parent_folder.files[old_idx] = new_file
+                modified += 1
+        else:
+            new_files.append(new_file)
+            added += 1
+
+    # Find removed files
+    removed = 0
+    indices_to_remove = []
+    for path, idx in existing_paths.items():
+        if path not in seen_paths:
+            indices_to_remove.append(idx)
+            removed += 1
+
+    # Remove in reverse order to preserve indices
+    for idx in sorted(indices_to_remove, reverse=True):
+        parent_folder.files.pop(idx)
+
+    # Add new files
+    parent_folder.files.extend(new_files)
+
+    # Update counts
+    parent_folder.file_count = len(parent_folder.files)
+    parent_folder.total_size = sum(
+        f.get("size", 0) if isinstance(f, dict) else f.size
+        for f in parent_folder.files
+    )
+
+    return added, modified, removed
+
+
+# ============================================================================
 # Incremental Mode (Changes API)
 # ============================================================================
 
@@ -295,8 +471,8 @@ def generate_incremental():
         generate_full(force_rescan=False)
         return
 
-    # Apply changes
-    print("Fetching changes since last update...")
+    # Apply changes from Changes API (catches directly owned files)
+    print("Checking for changes (owned files)...")
     start_time = time.time()
 
     client_config = DriveClientConfig(api_key=API_KEY)
@@ -311,12 +487,53 @@ def generate_incremental():
 
     elapsed = time.time() - start_time
     print(f"  Processed in {format_duration(elapsed)} ({stats.api_calls} API calls)")
+
+    if stats.added > 0 or stats.modified > 0 or stats.removed > 0:
+        print(f"  Changes: +{stats.added} -{stats.removed} ~{stats.modified}")
     print()
 
-    if stats.added == 0 and stats.modified == 0 and stats.removed == 0:
+    # Check shortcut folders for changes (catches external/shared files)
+    print("Checking shortcut folders for changes...")
+    start_api = client.api_calls
+    changed_shortcuts = check_shortcut_folders(client, manifest, root_folders)
+    shortcut_api_calls = client.api_calls - start_api
+
+    total_sc_added = 0
+    total_sc_modified = 0
+    total_sc_removed = 0
+
+    if changed_shortcuts:
+        print(f"  Found {len(changed_shortcuts)} folder(s) with changes")
+        scanner = FolderScanner(client)
+
+        for sc in changed_shortcuts:
+            print(f"  Rescanning: {sc['parent_name']}/{sc['name']}...")
+            sc_added, sc_modified, sc_removed = rescan_shortcut_folder(
+                client, scanner, manifest, sc
+            )
+            total_sc_added += sc_added
+            total_sc_modified += sc_modified
+            total_sc_removed += sc_removed
+            if sc_added or sc_modified or sc_removed:
+                print(f"    +{sc_added} -{sc_removed} ~{sc_modified}")
+
+        # Update shortcut timestamps after successful rescan
+        for sc in changed_shortcuts:
+            manifest.shortcut_folders[sc["shortcut_id"]]["last_modified"] = sc["current_modified"]
+    else:
+        print(f"  No shortcut folder changes ({shortcut_api_calls} API calls)")
+    print()
+
+    # Combine totals
+    total_added = stats.added + total_sc_added
+    total_modified = stats.modified + total_sc_modified
+    total_removed = stats.removed + total_sc_removed
+    total_api = client.api_calls
+
+    if total_added == 0 and total_modified == 0 and total_removed == 0:
         print("No changes detected!")
         manifest.save()
-        print(f"  Token updated. Total API calls: {stats.api_calls}")
+        print(f"  Token updated. Total API calls: {total_api}")
         return
 
     # Save manifest
@@ -327,11 +544,12 @@ def generate_incremental():
     print("=" * 60)
     print("Summary")
     print("=" * 60)
-    print(f"  Added: {stats.added} files")
-    print(f"  Removed: {stats.removed} files")
-    print(f"  Modified: {stats.modified} files")
-    print(f"  Skipped: {stats.skipped} (not in tracked folders)")
-    print(f"  Total API calls: {stats.api_calls}")
+    print(f"  Added: {total_added} files")
+    print(f"  Removed: {total_removed} files")
+    print(f"  Modified: {total_modified} files")
+    if stats.skipped:
+        print(f"  Skipped: {stats.skipped} (not in tracked folders)")
+    print(f"  Total API calls: {total_api}")
     print()
 
 
