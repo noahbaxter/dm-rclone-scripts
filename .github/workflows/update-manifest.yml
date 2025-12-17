@@ -1,9 +1,9 @@
 name: Update Manifest
 
 on:
-  # Run daily at 6 AM UTC
+  # Run every 10 minutes
   schedule:
-    - cron: '0 6 * * *'
+    - cron: '*/10 * * * *'
   # Allow manual trigger
   workflow_dispatch:
     inputs:
