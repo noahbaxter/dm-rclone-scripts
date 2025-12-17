@@ -1,7 +1,7 @@
 """
 Archive extraction for DM Chart Sync.
 
-Handles extracting ZIP, 7z, and RAR archives with bundled library support.
+Handles extracting ZIP, 7z, and RAR archives with bundled tool support.
 """
 
 import os
@@ -21,36 +21,42 @@ except ImportError:
     HAS_7Z = False
 
 
-def _setup_unrar_library():
-    """Configure rarfile to use bundled UnRAR library."""
-    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-        # Running from PyInstaller bundle
-        bundle_dir = sys._MEIPASS
-        if os.name == 'nt':
-            lib_path = os.path.join(bundle_dir, 'UnRAR64.dll')
-        else:
-            lib_path = os.path.join(bundle_dir, 'libunrar.dylib')
-        if os.path.exists(lib_path):
-            os.environ['UNRAR_LIB_PATH'] = lib_path
-    else:
-        # Development mode - check for libs folder
-        dev_libs = Path(__file__).parent.parent.parent / 'libs' / 'bin'
-        if os.name == 'nt':
-            lib_path = dev_libs / 'UnRAR64.dll'
-        else:
-            lib_path = dev_libs / 'libunrar.dylib'
-        if lib_path.exists():
-            os.environ['UNRAR_LIB_PATH'] = str(lib_path)
-
-
-_setup_unrar_library()
-
 try:
     import rarfile
     HAS_RAR_LIB = True
 except ImportError:
     HAS_RAR_LIB = False
     rarfile = None
+
+
+def _setup_unrar_tool():
+    """Configure rarfile to use bundled UnRAR command-line tool."""
+    if not HAS_RAR_LIB:
+        return
+
+    tool_path = None
+
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        # Running from PyInstaller bundle
+        bundle_dir = sys._MEIPASS
+        if os.name == 'nt':
+            tool_path = os.path.join(bundle_dir, 'UnRAR.exe')
+        else:
+            tool_path = os.path.join(bundle_dir, 'unrar')
+    else:
+        # Development mode - check for libs folder
+        dev_libs = Path(__file__).parent.parent.parent / 'libs' / 'bin'
+        if os.name == 'nt':
+            tool_path = dev_libs / 'UnRAR.exe'
+        else:
+            tool_path = dev_libs / 'unrar'
+        tool_path = str(tool_path) if tool_path.exists() else None
+
+    if tool_path and os.path.exists(tool_path):
+        rarfile.UNRAR_TOOL = tool_path
+
+
+_setup_unrar_tool()
 
 
 # Checksum file name (excluded from size calculations)
@@ -101,7 +107,7 @@ def extract_archive(archive_path: Path, dest_folder: Path) -> Tuple[bool, str]:
     Supports:
     - ZIP: zipfile (stdlib)
     - 7z: py7zr
-    - RAR: rarfile with bundled UnRAR library
+    - RAR: rarfile with bundled UnRAR tool
 
     Returns (success, error_message).
     """

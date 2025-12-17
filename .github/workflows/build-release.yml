@@ -107,7 +107,7 @@ jobs:
             --add-data "drives.json:." \
             --add-data "VERSION:." \
             --add-data "$CERTIFI_PATH:certifi" \
-            --add-binary "libs/bin/libunrar.dylib:." \
+            --add-binary "libs/bin/unrar:." \
             --hidden-import certifi \
             --hidden-import rarfile \
             sync.py
@@ -121,7 +121,7 @@ jobs:
             --add-data "drives.json;." `
             --add-data "VERSION;." `
             --add-data "$CERTIFI_PATH;certifi" `
-            --add-binary "libs/bin/UnRAR64.dll;." `
+            --add-binary "libs/bin/UnRAR.exe;." `
             --hidden-import certifi `
             --hidden-import rarfile `
             sync.py
