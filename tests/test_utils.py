@@ -90,6 +90,29 @@ class TestSanitizeFilename:
         # Fullwidth colon U+FF1A - NOT the same as ASCII colon
         assert sanitize_filename("Title：Subtitle") == "Title：Subtitle"
 
+    def test_unicode_nfd_normalized_to_nfc(self):
+        """
+        NFD (decomposed) Unicode is normalized to NFC (composed).
+
+        This fixes the Pokémon bug where manifest has NFD encoding but
+        disk has NFC - without normalization, the paths don't match.
+        """
+        import unicodedata
+
+        # "Pokémon" in NFC (composed é - single codepoint U+00E9)
+        nfc_name = "Pokémon"
+        # "Pokémon" in NFD (decomposed é - 'e' + combining acute U+0301)
+        nfd_name = unicodedata.normalize("NFD", "Pokémon")
+
+        # Verify they're actually different bytes
+        assert nfc_name != nfd_name
+        assert len(nfc_name) == 7
+        assert len(nfd_name) == 8  # Extra char for combining accent
+
+        # But sanitize_filename should normalize both to NFC
+        assert sanitize_filename(nfc_name) == sanitize_filename(nfd_name)
+        assert sanitize_filename(nfd_name) == "Pokémon"  # NFC output
+
 
 class TestSanitizePath:
     """Tests for sanitize_path() - sanitizes each path component."""
@@ -336,6 +359,50 @@ class TestCrossPlatformPaths:
         assert len(parents) == 2
         assert "Setlist/ChartA" in parents
         assert "Setlist/ChartB" in parents
+
+
+class TestManifestPathSanitization:
+    """Tests for manifest path sanitization at load time."""
+
+    def test_manifest_paths_sanitized_on_fetch(self):
+        """
+        Manifest file paths are sanitized when fetched.
+
+        This ensures NFD Unicode, illegal chars, etc. are normalized
+        at the source so downstream code gets clean paths.
+        """
+        import unicodedata
+        from src.manifest.fetch import _sanitize_manifest_paths
+
+        # Simulate manifest with problematic paths
+        manifest = {
+            "folders": [{
+                "name": "TestDrive",
+                "folder_id": "abc123",
+                "files": [
+                    # NFD Unicode (decomposed é)
+                    {"id": "1", "path": unicodedata.normalize("NFD", "Pokémon/song.ini"), "size": 100},
+                    # Illegal chars
+                    {"id": "2", "path": "Title: Subtitle/chart.zip", "size": 200},
+                    # Trailing space (Windows issue)
+                    {"id": "3", "path": "Artist /notes.mid", "size": 50},
+                ]
+            }]
+        }
+
+        result = _sanitize_manifest_paths(manifest)
+
+        paths = [f["path"] for f in result["folders"][0]["files"]]
+
+        # NFD should be normalized to NFC
+        assert paths[0] == "Pokémon/song.ini"
+        assert len(paths[0].split("/")[0]) == 7  # NFC "Pokémon" is 7 chars
+
+        # Colon should become " -"
+        assert paths[1] == "Title - Subtitle/chart.zip"
+
+        # Trailing space should be stripped
+        assert paths[2] == "Artist/notes.mid"
 
 
 if __name__ == "__main__":

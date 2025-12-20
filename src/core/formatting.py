@@ -3,6 +3,7 @@ Formatting and sanitization utilities for DM Chart Sync.
 """
 
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Union
 
@@ -47,6 +48,11 @@ def sanitize_filename(filename: str) -> str:
     """
     if not filename:
         return filename
+
+    # Normalize Unicode to NFC to match scan_local_files behavior.
+    # macOS and some sources use NFD (decomposed), Windows expects NFC (composed).
+    # Without this, "Pokémon" (NFD) won't match "Pokémon" (NFC) in path comparisons.
+    filename = unicodedata.normalize("NFC", filename)
 
     result = []
     for char in filename:

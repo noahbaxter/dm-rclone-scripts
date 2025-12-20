@@ -225,15 +225,15 @@ class TestPlanDownloadsRegularFiles:
         assert len(tasks) == 0
         assert skipped == 1
 
-    def test_sync_state_disk_size_mismatch_triggers_download(self, temp_dir):
+    def test_sync_state_trusted_without_disk_verification(self, temp_dir):
         """
-        Bug #9 regression test: sync_state says synced but disk size differs.
+        sync_state is trusted without verifying disk.
 
-        This catches the case where a file was downloaded, then modified locally
-        (or extracted with wrong size). sync_state thinks it's synced, but disk
-        size doesn't match manifest - should re-download.
+        If sync_state says file is synced with matching size, we trust it.
+        If user modifies files after download, they can delete sync_state.json
+        to force re-verification.
         """
-        # Create file on disk with DIFFERENT size than manifest expects
+        # Create file on disk with DIFFERENT size than sync_state/manifest
         local_file = temp_dir / "folder" / "song.ini"
         local_file.parent.mkdir(parents=True)
         local_file.write_text("modified content here")  # 21 bytes
@@ -241,7 +241,7 @@ class TestPlanDownloadsRegularFiles:
         # sync_state says we downloaded it with manifest's expected size
         sync_state = SyncState(temp_dir)
         sync_state.load()
-        sync_state.add_file("TestDrive/folder/song.ini", size=100)  # recorded size
+        sync_state.add_file("TestDrive/folder/song.ini", size=100)
 
         # Manifest says file should be 100 bytes
         files = [{"id": "1", "path": "folder/song.ini", "size": 100, "md5": "abc"}]
@@ -249,9 +249,176 @@ class TestPlanDownloadsRegularFiles:
             files, temp_dir, sync_state=sync_state, folder_name="TestDrive"
         )
 
-        # Should re-download because disk size (21) != manifest size (100)
-        assert len(tasks) == 1, "Should re-download when disk size differs from manifest"
+        # sync_state is trusted - file is skipped even though disk differs
+        assert len(tasks) == 0, "sync_state should be trusted without disk verification"
+        assert skipped == 1
+
+
+class TestPlanDownloadsMigration:
+    """Tests for migration from rclone and sync_state recovery."""
+
+    @pytest.fixture
+    def temp_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield Path(tmpdir)
+
+    def test_file_not_in_sync_state_but_exists_with_correct_size(self, temp_dir):
+        """
+        Migration case: file exists on disk but not in sync_state.
+
+        When sync_state doesn't know about a file (migration from rclone,
+        or after deleting sync_state.json), fall back to filesystem check.
+        If file exists with correct size, skip it.
+        """
+        # Create file on disk with correct size
+        local_file = temp_dir / "folder" / "song.ini"
+        local_file.parent.mkdir(parents=True)
+        local_file.write_text("content")  # 7 bytes
+
+        # Empty sync_state (simulates migration or deleted sync_state.json)
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+
+        # Manifest says file should be 7 bytes
+        files = [{"id": "1", "path": "folder/song.ini", "size": 7, "md5": "abc"}]
+        tasks, skipped, _ = plan_downloads(
+            files, temp_dir, sync_state=sync_state, folder_name="TestDrive"
+        )
+
+        # File exists with correct size - should be skipped
+        assert len(tasks) == 0, "Existing file with correct size should be skipped"
+        assert skipped == 1
+
+    def test_file_not_in_sync_state_exists_with_wrong_size(self, temp_dir):
+        """
+        Migration case: file exists but with wrong size.
+
+        File might be outdated or corrupted. Should re-download.
+        """
+        # Create file on disk with WRONG size
+        local_file = temp_dir / "folder" / "song.ini"
+        local_file.parent.mkdir(parents=True)
+        local_file.write_text("old")  # 3 bytes
+
+        # Empty sync_state
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+
+        # Manifest says file should be 100 bytes
+        files = [{"id": "1", "path": "folder/song.ini", "size": 100, "md5": "abc"}]
+        tasks, skipped, _ = plan_downloads(
+            files, temp_dir, sync_state=sync_state, folder_name="TestDrive"
+        )
+
+        # File exists but wrong size - should download
+        assert len(tasks) == 1, "File with wrong size should be downloaded"
         assert skipped == 0
+
+    def test_file_not_in_sync_state_does_not_exist(self, temp_dir):
+        """
+        Migration case: file not in sync_state and doesn't exist on disk.
+
+        This is a genuinely new file that needs downloading.
+        """
+        # Empty sync_state, no file on disk
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+
+        files = [{"id": "1", "path": "folder/song.ini", "size": 100, "md5": "abc"}]
+        tasks, skipped, _ = plan_downloads(
+            files, temp_dir, sync_state=sync_state, folder_name="TestDrive"
+        )
+
+        # File doesn't exist - should download
+        assert len(tasks) == 1
+        assert skipped == 0
+
+    def test_sync_state_none_falls_back_to_filesystem(self, temp_dir):
+        """
+        When sync_state is None, always check filesystem.
+        """
+        # Create file on disk
+        local_file = temp_dir / "folder" / "song.ini"
+        local_file.parent.mkdir(parents=True)
+        local_file.write_text("content")  # 7 bytes
+
+        # No sync_state at all
+        files = [{"id": "1", "path": "folder/song.ini", "size": 7, "md5": "abc"}]
+        tasks, skipped, _ = plan_downloads(
+            files, temp_dir, sync_state=None, folder_name="TestDrive"
+        )
+
+        # Should check filesystem and find the file
+        assert len(tasks) == 0
+        assert skipped == 1
+
+    def test_manifest_size_changed_triggers_redownload(self, temp_dir):
+        """
+        When manifest has new size, file should be re-downloaded.
+
+        sync_state tracks what we downloaded. If manifest is updated with
+        a new version (different size), sync_state won't match and we
+        fall back to filesystem check.
+        """
+        # Create file on disk with old size
+        local_file = temp_dir / "folder" / "song.ini"
+        local_file.parent.mkdir(parents=True)
+        local_file.write_text("old content")  # 11 bytes
+
+        # sync_state has old size
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+        sync_state.add_file("TestDrive/folder/song.ini", size=11)
+
+        # Manifest updated with NEW size (new version of file)
+        files = [{"id": "1", "path": "folder/song.ini", "size": 200, "md5": "newmd5"}]
+        tasks, skipped, _ = plan_downloads(
+            files, temp_dir, sync_state=sync_state, folder_name="TestDrive"
+        )
+
+        # sync_state size (11) != manifest size (200), so is_file_synced returns False
+        # Filesystem check: disk size (11) != manifest size (200)
+        # Should re-download
+        assert len(tasks) == 1, "Changed manifest size should trigger re-download"
+
+    def test_multiple_files_mixed_states(self, temp_dir):
+        """
+        Test handling multiple files with different states.
+        """
+        # File 1: in sync_state, should be trusted
+        # File 2: not in sync_state, exists with correct size
+        # File 3: not in sync_state, exists with wrong size
+        # File 4: not in sync_state, doesn't exist
+
+        (temp_dir / "folder").mkdir(parents=True)
+        (temp_dir / "folder" / "file1.ini").write_text("x" * 10)
+        (temp_dir / "folder" / "file2.ini").write_text("x" * 20)
+        (temp_dir / "folder" / "file3.ini").write_text("x" * 5)  # wrong size
+        # file4 doesn't exist
+
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+        sync_state.add_file("TestDrive/folder/file1.ini", size=10)
+
+        files = [
+            {"id": "1", "path": "folder/file1.ini", "size": 10, "md5": "a"},
+            {"id": "2", "path": "folder/file2.ini", "size": 20, "md5": "b"},
+            {"id": "3", "path": "folder/file3.ini", "size": 30, "md5": "c"},  # disk has 5
+            {"id": "4", "path": "folder/file4.ini", "size": 40, "md5": "d"},
+        ]
+        tasks, skipped, _ = plan_downloads(
+            files, temp_dir, sync_state=sync_state, folder_name="TestDrive"
+        )
+
+        # file1: skipped (sync_state)
+        # file2: skipped (filesystem fallback, correct size)
+        # file3: download (filesystem fallback, wrong size)
+        # file4: download (doesn't exist)
+        assert skipped == 2
+        assert len(tasks) == 2
+        task_paths = [str(t.local_path) for t in tasks]
+        assert any("file3.ini" in p for p in task_paths)
+        assert any("file4.ini" in p for p in task_paths)
 
 
 class TestPlanDownloadsPathSanitization:

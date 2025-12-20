@@ -123,15 +123,14 @@ def plan_downloads(
                 long_paths.append(file_path)
                 continue
 
-            is_synced = False
-            if sync_state:
-                # Use sync_state for checking
-                if sync_state.is_file_synced(rel_path, file_size):
-                    # Also verify file exists on disk with matching size
-                    # (file may have been modified after download)
-                    is_synced = file_exists_with_size(local_path, file_size)
+            # Check if file is already synced
+            if sync_state and sync_state.is_file_synced(rel_path, file_size):
+                # sync_state tracks this file with matching size - trust it
+                is_synced = True
             else:
-                # Fall back to size check
+                # Not in sync_state - check if file exists on disk with correct size
+                # (file_size is from manifest, so this validates local matches manifest)
+                # Handles: migration from rclone, recovery after deleting sync_state.json
                 is_synced = file_exists_with_size(local_path, file_size)
 
             if is_synced:
