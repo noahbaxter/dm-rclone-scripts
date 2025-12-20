@@ -1,13 +1,12 @@
-name: CI
+name: Release
 
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
+    paths: ['VERSION']
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   test:
@@ -44,7 +43,6 @@ jobs:
 
   build:
     needs: test
-    if: github.ref == 'refs/heads/main'
     strategy:
       matrix:
         include:
@@ -76,7 +74,6 @@ jobs:
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
-          # Replace the env var lookup with the actual key for the build
           if [ "${{ matrix.name }}" = "windows" ]; then
             sed -i 's/os.environ.get("GOOGLE_API_KEY", "")/"'"$GOOGLE_API_KEY"'"/' sync.py
           else
@@ -90,7 +87,6 @@ jobs:
       - name: Build executable (macOS)
         if: matrix.name == 'macos'
         run: |
-          # Include certifi CA bundle for SSL verification in bundled app
           CERTIFI_PATH=$(python -c "import certifi; print(certifi.where())")
           pyinstaller --onefile --name synchotic-macos --clean --noconfirm \
             --add-data "drives.json:." \
@@ -104,7 +100,6 @@ jobs:
       - name: Build executable (Windows)
         if: matrix.name == 'windows'
         run: |
-          # Include certifi CA bundle for SSL verification in bundled app
           $CERTIFI_PATH = python -c "import certifi; print(certifi.where())"
           pyinstaller --onefile --name synchotic --clean --noconfirm `
             --add-data "drives.json;." `
@@ -121,3 +116,57 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: dist/${{ matrix.artifact }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: echo "version=v$(cat VERSION)" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          cat << 'EOF' > notes.md
+          ## Synchotic ${{ steps.version.outputs.version }}
+
+          ### Downloads
+          - **Windows**: `synchotic.exe`
+          - **macOS**: `synchotic-macos` (run `chmod +x synchotic-macos` after downloading)
+
+          ### Features
+          - Zero-setup chart downloads from Google Drive
+          - Smart sync (only downloads new/changed files)
+          - Pause/Stop with ESC key
+          - Setlist filtering (choose which setlists to sync)
+          - Custom download paths
+          - Parallel downloads
+          EOF
+
+          gh release view "$VERSION" && gh release delete "$VERSION" --yes || true
+          gh release create "$VERSION" \
+            --title "Synchotic $VERSION" \
+            --notes-file notes.md \
+            artifacts/synchotic-macos/synchotic-macos \
+            artifacts/synchotic.exe/synchotic.exe
+
+      - name: Summary
+        run: |
+          echo "### Release Created" >> $GITHUB_STEP_SUMMARY
+          echo "- Version: ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- macOS: synchotic-macos" >> $GITHUB_STEP_SUMMARY
+          echo "- Windows: synchotic.exe" >> $GITHUB_STEP_SUMMARY
