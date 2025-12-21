@@ -41,7 +41,6 @@ class FolderSync:
         folder: dict,
         base_path: Path,
         disabled_prefixes: list[str] = None,
-        skip_file_ids: set[str] = None
     ) -> tuple[int, int, int, list[str], bool]:
         """
         Sync a folder to local disk.
@@ -50,7 +49,6 @@ class FolderSync:
             folder: Folder dict from manifest
             base_path: Base download path
             disabled_prefixes: List of path prefixes to exclude (disabled subfolders)
-            skip_file_ids: Set of file IDs to skip (e.g., permanently rate-limited)
 
         Returns:
             Tuple of (downloaded, skipped, errors, rate_limited_file_ids, cancelled)
@@ -119,14 +117,8 @@ class FolderSync:
                 print_long_path_warning(len(long_paths))
 
         if not tasks and not skipped:
-            print(f"  No files found or error accessing folder")
-            return 0, 0, 1, [], False
-
-        # Filter out permanently skipped files (e.g., exceeded retry limit)
-        if skip_file_ids:
-            original_count = len(tasks)
-            tasks = [t for t in tasks if t.file_id not in skip_file_ids]
-            skipped += original_count - len(tasks)
+            print(f"  No files to download")
+            return 0, 0, 0, [], False
 
         if not tasks:
             print(f"  All {skipped} files already downloaded")
@@ -158,19 +150,6 @@ class FolderSync:
         download_path: Path,
         disabled_prefixes_map: dict[str, list[str]] = None
     ):
-        """
-        Download selected folders.
-
-        Automatically retries rate-limited files by re-running the sync
-        (which skips already-downloaded files) until everything succeeds.
-        Files that fail 3+ times are skipped and reported at the end.
-
-        Args:
-            folders: List of folder dicts from manifest
-            indices: List of folder indices to download
-            download_path: Base download path
-            disabled_prefixes_map: Dict mapping folder_id to list of disabled path prefixes
-        """
         print()
         print("=" * 50)
         print("Starting download...")
@@ -184,82 +163,39 @@ class FolderSync:
         total_downloaded = 0
         total_skipped = 0
         total_errors = 0
+        total_rate_limited = 0
         was_cancelled = False
-        retry_round = 0
-        max_retries = 10  # Safety limit for total retry rounds
-        max_per_file_retries = 3  # Skip files after this many failures
+        rate_limited_folders: set[str] = set()
 
-        # Track per-file retry counts: {file_id: retry_count}
-        file_retry_counts: dict[str, int] = {}
-        permanently_skipped: set[str] = set()
+        for idx in indices:
+            folder = folders[idx]
+            print(f"\n[{folder['name']}]")
+            print("-" * 40)
 
-        while retry_round <= max_retries:
-            round_downloaded = 0
-            round_rate_limited_ids: list[str] = []
+            # Get disabled prefixes for this specific folder
+            folder_id = folder.get("folder_id", "")
+            disabled_prefixes = disabled_prefixes_map.get(folder_id, [])
 
-            for idx in indices:
-                folder = folders[idx]
-                if retry_round == 0:
-                    print(f"\n[{folder['name']}]")
-                else:
-                    print(f"\n[{folder['name']}] (retry {retry_round})")
-                print("-" * 40)
+            downloaded, skipped, errors, rate_limited_ids, cancelled = self.sync_folder(
+                folder, download_path, disabled_prefixes
+            )
 
-                # Get disabled prefixes for this specific folder
-                folder_id = folder.get("folder_id", "")
-                disabled_prefixes = disabled_prefixes_map.get(folder_id, [])
+            total_downloaded += downloaded
+            total_skipped += skipped
+            total_errors += errors
+            total_rate_limited += len(rate_limited_ids)
 
-                downloaded, skipped, errors, rate_limited_ids, cancelled = self.sync_folder(
-                    folder, download_path, disabled_prefixes, skip_file_ids=permanently_skipped
-                )
+            if rate_limited_ids:
+                rate_limited_folders.add(folder['name'])
 
-                round_downloaded += downloaded
-                round_rate_limited_ids.extend(rate_limited_ids)
-                total_downloaded += downloaded
-                total_skipped += skipped
-                total_errors += errors
-
-                if cancelled:
-                    was_cancelled = True
-                    break
-
-                if len(rate_limited_ids) > 0:
-                    print(f"  Downloaded: {downloaded}, Skipped: {skipped}, Errors: {errors}, Rate-limited: {len(rate_limited_ids)}")
-                else:
-                    print(f"  Downloaded: {downloaded}, Skipped: {skipped}, Errors: {errors}")
-
-            if was_cancelled:
+            if cancelled:
+                was_cancelled = True
                 break
 
-            # Update per-file retry counts and check for files to permanently skip
-            new_permanent_skips = []
-            for file_id in round_rate_limited_ids:
-                file_retry_counts[file_id] = file_retry_counts.get(file_id, 0) + 1
-                if file_retry_counts[file_id] >= max_per_file_retries:
-                    permanently_skipped.add(file_id)
-                    new_permanent_skips.append(file_id)
-
-            if new_permanent_skips:
-                print(f"\n  Skipping {len(new_permanent_skips)} file(s) after {max_per_file_retries} failed attempts")
-
-            # Count files still needing retry (not permanently skipped)
-            still_rate_limited = [fid for fid in round_rate_limited_ids if fid not in permanently_skipped]
-
-            # If we had rate-limited files that aren't permanently skipped, wait and retry
-            if still_rate_limited:
-                retry_round += 1
-                wait_time = min(60, 15 + retry_round * 10)  # 25s, 35s, 45s, ... up to 60s
-                print(f"\n  {len(still_rate_limited)} files were rate-limited. Waiting {wait_time}s before retry...")
-                print("  (Press Ctrl+C to cancel)")
-                try:
-                    time.sleep(wait_time)
-                except KeyboardInterrupt:
-                    was_cancelled = True
-                    print("\n  Cancelled.")
-                    break
+            if len(rate_limited_ids) > 0:
+                print(f"  Downloaded: {downloaded}, Skipped: {skipped}, Errors: {errors}, Rate-limited: {len(rate_limited_ids)}")
             else:
-                # No more files to retry, we're done
-                break
+                print(f"  Downloaded: {downloaded}, Skipped: {skipped}, Errors: {errors}")
 
         if was_cancelled:
             return
@@ -270,17 +206,20 @@ class FolderSync:
         print(f"  Total downloaded: {total_downloaded}")
         print(f"  Total skipped (already exists): {total_skipped}")
         print(f"  Total errors: {total_errors}")
-        if permanently_skipped:
-            print(f"  Skipped due to rate limits: {len(permanently_skipped)}")
-        if retry_round > 0:
-            print(f"  Retry rounds needed: {retry_round}")
+        if total_rate_limited > 0:
+            print(f"  Couldn't download (folder rate-limited): {total_rate_limited}")
         print("=" * 50)
 
-        # Report permanently skipped files
-        if permanently_skipped:
+        # Give guidance for rate-limited folders
+        if rate_limited_folders:
             print()
-            print(f"  {len(permanently_skipped)} file(s) were skipped after repeated rate limiting.")
-            print("  These files will be retried on the next sync.")
+            folder_list = ", ".join(sorted(rate_limited_folders))
+            print(f"  [{folder_list}] hit Google's download limit.")
+            print()
+            print("  To get the remaining files:")
+            print("    - Run sync again after this finishes (some may work)")
+            print("    - If still blocked, try again tomorrow (resets every 24h)")
+            print()
 
         # Auto-dismiss after 2 seconds (any key skips)
         wait_with_skip(2)

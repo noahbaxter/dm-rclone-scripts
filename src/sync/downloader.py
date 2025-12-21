@@ -173,8 +173,8 @@ class FileDownloader:
                                 return DownloadResult(
                                     success=False,
                                     file_path=task.local_path,
-                                    message=f"SKIP (rate limited): {display_name}",
-                                    retryable=True,
+                                    message=f"SKIP (sign in to bypass virus scan): {display_name}",
+                                    retryable=False,
                                 )
 
                         return await self._write_response(response, task, progress_tracker)
@@ -201,18 +201,27 @@ class FileDownloader:
                                 auth_response.raise_for_status()
                                 return await self._write_response(auth_response, task, progress_tracker)
                         except aiohttp.ClientResponseError as auth_e:
-                            is_retryable = auth_e.status in (403, 429) or 500 <= auth_e.status < 600
+                            if auth_e.status == 403:
+                                msg = f"ERR (folder rate limited): {display_name}"
+                            elif auth_e.status == 429:
+                                msg = f"ERR (rate limited): {display_name}"
+                            else:
+                                msg = f"ERR (HTTP {auth_e.status}): {display_name}"
+                            # Mark as retryable for tracking (reported to user at end)
+                            # 403/429 won't retry this session - user should try again later
+                            is_rate_limit = auth_e.status in (403, 429)
                             return DownloadResult(
                                 success=False,
                                 file_path=task.local_path,
-                                message=f"ERR (auth failed, HTTP {auth_e.status}): {display_name}",
-                                retryable=is_retryable,
+                                message=msg,
+                                retryable=is_rate_limit,
                             )
                     if e.status == 403:
+                        # Folder rate limited - mark for tracking, user should try again later
                         return DownloadResult(
                             success=False,
                             file_path=task.local_path,
-                            message=f"ERR (HTTP 403): {display_name}",
+                            message=f"ERR (folder rate limited): {display_name}",
                             retryable=True,
                         )
                     if attempt < self.max_retries - 1:
@@ -605,18 +614,8 @@ class FileDownloader:
 
         if auth_failures > 0 and len(rate_limited_ids) == 0:
             print()
-            print(f"  ⚠ {auth_failures} files failed due to access restrictions.")
-            print()
-            print("  These files aren't shared publicly. To fix this:")
-            print()
-            print("    1. Open the folder link in your browser while signed in to Google")
-            print("    2. Right-click the folder → 'Add shortcut to Drive' → select My Drive")
-            print()
-            print("  This adds the folder to your Drive, which grants your account access.")
-            print("  Then try downloading again.")
-            print()
-            print("  If that doesn't work, the folder may have restricted sharing settings.")
-            print("  Ask the owner to set sharing to 'Anyone with the link' for public access.")
+            print(f"  ⚠ {auth_failures} files failed - your sign-in may have expired.")
+            print("  Try signing out and back in, then sync again.")
             print()
 
         return downloaded, 0, permanent_errors, rate_limited_ids, cancelled
