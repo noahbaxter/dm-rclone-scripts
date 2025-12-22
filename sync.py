@@ -330,7 +330,7 @@ class SyncApp:
         """Toggle a drive on/off at the top level (preserves setlist settings)."""
         self.user_settings.toggle_drive(folder_id)
         self.user_settings.save()
-        # Only invalidate this folder's stats
+        # Invalidate this folder's stats to recalculate purge counts
         self.folder_stats_cache.invalidate(folder_id)
 
     def handle_toggle_group(self, group_name: str):

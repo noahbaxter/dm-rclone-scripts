@@ -125,10 +125,36 @@ def compute_main_menu_cache(
         folder_purge_count = stats.purge_count
         folder_purge_charts = stats.purge_charts
         folder_purge_size = stats.purge_size
-        display_string = stats.display_string
+
+        # Check if drive is enabled (for display string and aggregation)
+        drive_enabled = user_settings.is_drive_enabled(folder_id) if user_settings else True
+        delta_mode = user_settings.delta_mode if user_settings else "size"
+
+        # Get setlist counts for this folder
+        setlists = extract_subfolders_from_manifest(folder)
+        total_setlists = len(setlists) if setlists else 0
+        enabled_setlists = 0
+        if setlists and user_settings:
+            enabled_setlists = sum(
+                1 for c in setlists
+                if user_settings.is_subfolder_enabled(folder_id, c)
+            )
+
+        # Always regenerate display string with current enabled state
+        display_string = format_home_item(
+            enabled_setlists=enabled_setlists,
+            total_setlists=total_setlists,
+            total_size=status.total_size,
+            synced_size=status.synced_size,
+            purgeable_files=folder_purge_count,
+            purgeable_charts=folder_purge_charts,
+            purgeable_size=folder_purge_size,
+            missing_charts=status.missing_charts,
+            disabled=not drive_enabled,
+            delta_mode=delta_mode,
+        )
 
         # Only aggregate enabled drives into global stats for add/sync
-        drive_enabled = user_settings.is_drive_enabled(folder_id) if user_settings else True
         if drive_enabled:
             global_status.total_charts += status.total_charts
             global_status.synced_charts += status.synced_charts
@@ -141,15 +167,9 @@ def compute_main_menu_cache(
         global_purge_charts += folder_purge_charts
         global_purge_size += folder_purge_size
 
-        # Count setlists
-        setlists = extract_subfolders_from_manifest(folder)
-        if setlists:
-            global_total_setlists += len(setlists)
-            if user_settings:
-                global_enabled_setlists += sum(
-                    1 for c in setlists
-                    if user_settings.is_subfolder_enabled(folder_id, c)
-                )
+        # Count setlists (already computed above for display string)
+        global_total_setlists += total_setlists
+        global_enabled_setlists += enabled_setlists
 
         cache.folder_stats[folder_id] = display_string
 
