@@ -13,17 +13,24 @@ MANIFEST_URL = "https://github.com/noahbaxter/dm-rclone-scripts/releases/downloa
 
 
 def _sanitize_manifest_paths(manifest: dict) -> dict:
-    """
-    Sanitize all file paths in manifest for consistent comparison.
-
-    This ensures paths are normalized (NFC Unicode, illegal chars replaced)
-    at the source, so all downstream code gets clean paths automatically.
-    """
     for folder in manifest.get("folders", []):
         for f in folder.get("files", []):
             if "path" in f:
                 f["path"] = sanitize_path(f["path"])
     return manifest
+
+
+def check_network(timeout: float = 3.0) -> tuple[bool, str | None]:
+    """Check if we can reach GitHub. Returns (is_online, error_message)."""
+    try:
+        requests.head("https://github.com", timeout=timeout)
+        return True, None
+    except requests.ConnectionError:
+        return False, "No internet connection"
+    except requests.Timeout:
+        return False, "Connection timed out"
+    except Exception as e:
+        return False, f"Network error: {e}"
 
 
 def fetch_manifest(use_local: bool = False) -> dict:
@@ -39,18 +46,35 @@ def fetch_manifest(use_local: bool = False) -> dict:
     local_path = get_manifest_path()
 
     if not use_local:
-        # Try remote first
+        # Check network connectivity first
+        is_online, network_error = check_network()
+
+        if not is_online:
+            print(f"\nError: {network_error}")
+            print("This app requires an internet connection to download charts.")
+            print("Please check your connection and try again.\n")
+            raise SystemExit(1)
+
+        # Network is up, try to fetch manifest
         try:
             response = requests.get(MANIFEST_URL, timeout=10)
             response.raise_for_status()
             return _sanitize_manifest_paths(response.json())
-        except Exception:
-            pass
+        except requests.HTTPError as e:
+            print(f"Warning: Failed to fetch manifest (HTTP {e.response.status_code})")
+        except requests.Timeout:
+            print("Warning: Manifest fetch timed out")
+        except Exception as e:
+            print(f"Warning: Manifest fetch error: {e}")
 
-    # Use local manifest
+        # Fetch failed - exit since we can't get the manifest
+        print("Please try again later.\n")
+        raise SystemExit(1)
+
+    # Explicitly requested local manifest
     if local_path.exists():
         manifest = Manifest.load(local_path)
         return _sanitize_manifest_paths(manifest.to_dict())
 
-    print("Warning: Could not load folder manifest.\n")
+    print("Error: Local manifest not found.\n")
     return {"folders": []}
