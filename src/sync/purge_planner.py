@@ -46,7 +46,7 @@ class PurgeStats:
         return self.chart_size + self.extra_file_size + self.partial_size + self.video_size
 
 
-def find_partial_downloads(base_path: Path) -> List[Tuple[Path, int]]:
+def find_partial_downloads(base_path: Path, local_files: dict = None) -> List[Tuple[Path, int]]:
     """
     Find partial download files (files with _download_ prefix).
 
@@ -54,6 +54,7 @@ def find_partial_downloads(base_path: Path) -> List[Tuple[Path, int]]:
 
     Args:
         base_path: Base download path to scan
+        local_files: Optional pre-scanned local files dict (avoids expensive rglob)
 
     Returns:
         List of (Path, size) tuples for partial download files
@@ -62,6 +63,15 @@ def find_partial_downloads(base_path: Path) -> List[Tuple[Path, int]]:
     if not base_path.exists():
         return partial_files
 
+    # Use cached local_files if available (much faster than rglob)
+    if local_files is not None:
+        for rel_path, size in local_files.items():
+            filename = rel_path.split("/")[-1] if "/" in rel_path else rel_path
+            if filename.startswith("_download_"):
+                partial_files.append((base_path / rel_path, size))
+        return partial_files
+
+    # Fallback to rglob if no cached files
     for f in base_path.rglob("_download_*"):
         if f.is_file():
             try:
@@ -182,8 +192,8 @@ def plan_purge(
             stats.estimated_charts += len(chart_parents)
             continue
 
-        # Only scan for partial downloads on ENABLED drives (rglob is expensive)
-        partial_files = find_partial_downloads(folder_path)
+        # Find partial downloads using cached local_files (fast dict iteration)
+        partial_files = find_partial_downloads(folder_path, local_files)
         if partial_files:
             stats.partial_count += len(partial_files)
             stats.partial_size += sum(size for _, size in partial_files)
