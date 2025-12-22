@@ -6,7 +6,7 @@ Handles file downloading, sync logic, and progress tracking.
 
 from ..core.progress import ProgressTracker  # Re-export from core for backwards compat
 from .cache import clear_cache, clear_folder_cache, FolderStats, FolderStatsCache
-from .status import SyncStatus, get_sync_status
+from .status import SyncStatus, get_sync_status, get_setlist_sync_status
 from .download_planner import DownloadTask, plan_downloads
 from .purge_planner import PurgeStats, count_purgeable_files, count_purgeable_detailed
 from .purger import delete_files
@@ -29,6 +29,7 @@ __all__ = [
     # Sync status
     "SyncStatus",
     "get_sync_status",
+    "get_setlist_sync_status",
     # Download planning
     "DownloadTask",
     "plan_downloads",

@@ -44,8 +44,8 @@ def plan_downloads(
     """
     Plan which files need to be downloaded.
 
-    For regular files: check if exists with matching size (or sync_state if available).
-    For archives: check if sync_state has matching MD5.
+    For regular files: check if exists on disk with matching size (manifest is source of truth).
+    For archives: check if sync_state has matching MD5 and extracted files exist.
 
     Args:
         files: List of file dicts with id, path, size keys
@@ -123,14 +123,10 @@ def plan_downloads(
                 long_paths.append(file_path)
                 continue
 
-            # Check if file is already synced
+            # Check sync_state first (O(1) hash lookup), fall back to disk
             if sync_state and sync_state.is_file_synced(rel_path, file_size):
-                # sync_state tracks this file with matching size - trust it
                 is_synced = True
             else:
-                # Not in sync_state - check if file exists on disk with correct size
-                # (file_size is from manifest, so this validates local matches manifest)
-                # Handles: migration from rclone, recovery after deleting sync_state.json
                 is_synced = file_exists_with_size(local_path, file_size)
 
             if is_synced:

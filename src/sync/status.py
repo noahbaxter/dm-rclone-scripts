@@ -94,6 +94,51 @@ def _file_in_disabled_setlist(file_path: str, disabled_setlists: set) -> bool:
     return setlist in disabled_setlists
 
 
+def _is_chart_synced(
+    data: dict,
+    folder_name: str,
+    sync_state: SyncState,
+    local_files: dict,
+    delete_videos: bool = True,
+) -> bool:
+    """
+    Check if a single chart (archive or folder) is synced.
+
+    Single source of truth for sync status - used by both _count_synced_charts
+    and _adjust_for_nested_archives to ensure consistent behavior.
+
+    Args:
+        data: Chart data dict with files, archive_name, etc.
+        folder_name: Parent folder name for building paths
+        sync_state: SyncState for O(1) lookups
+        local_files: Dict of {rel_path: size} from disk scan
+        delete_videos: Whether to exclude video files from sync check
+
+    Returns:
+        True if chart is synced, False otherwise
+    """
+    # Archive chart - check via sync_state
+    if data["archive_name"]:
+        is_synced, _ = _check_archive_synced(
+            sync_state, folder_name, data["checksum_path"],
+            data["archive_name"], data["archive_md5"]
+        )
+        return is_synced
+
+    # Folder chart - check if all (non-video) files are synced
+    files_to_check = data["files"]
+    if delete_videos:
+        files_to_check = [(fp, fs) for fp, fs in files_to_check if not _is_video_file(fp)]
+
+    def is_file_synced(file_path: str, expected_size: int) -> bool:
+        rel_path = f"{folder_name}/{file_path}"
+        if sync_state and sync_state.is_file_synced(rel_path, expected_size):
+            return True
+        return local_files.get(file_path) == expected_size
+
+    return all(is_file_synced(fp, fs) for fp, fs in files_to_check)
+
+
 def _build_chart_folders(manifest_files: list) -> dict:
     """
     Group manifest files by parent folder to identify charts.
@@ -192,15 +237,8 @@ def _count_synced_charts(
                 total_size += data["total_size"]
             continue
 
-        # Folder chart - check if all files exist locally
-        # When delete_videos=True, skip video files in sync check (they won't be downloaded)
-        files_to_check = data["files"]
-        if delete_videos:
-            files_to_check = [(fp, fs) for fp, fs in data["files"] if not _is_video_file(fp)]
-
-        all_synced = all(
-            local_files.get(fp) == fs for fp, fs in files_to_check
-        )
+        # Folder chart - use shared helper for sync check
+        is_synced = _is_chart_synced(data, folder_name, sync_state, local_files, delete_videos)
 
         # Calculate size excluding videos if delete_videos is enabled
         if delete_videos:
@@ -208,7 +246,7 @@ def _count_synced_charts(
         else:
             chart_size = data["total_size"]
 
-        if all_synced:
+        if is_synced:
             synced_charts += 1
             synced_size += chart_size
         total_size += chart_size
@@ -225,6 +263,7 @@ def _adjust_for_nested_archives(
     folder_name: str,
     folder_path: Path,
     user_settings,
+    delete_videos: bool = True,
 ) -> None:
     """
     Adjust chart counts for nested archives (1 archive = many charts).
@@ -260,21 +299,11 @@ def _adjust_for_nested_archives(
     # Count charts we computed (1 per archive/folder)
     folder_computed_charts = sum(1 for d in chart_folders.values() if d["is_chart"])
 
-    # Count how many are synced
-    folder_synced_charts = 0
-    for data in chart_folders.values():
-        if not data["is_chart"]:
-            continue
-        if data["archive_name"]:
-            is_synced, _ = _check_archive_synced(
-                sync_state, folder_name, data["checksum_path"],
-                data["archive_name"], data["archive_md5"]
-            )
-            if is_synced:
-                folder_synced_charts += 1
-        else:
-            if all(local_files.get(fp) == fs for fp, fs in data["files"]):
-                folder_synced_charts += 1
+    # Count how many are synced using shared helper
+    folder_synced_charts = sum(
+        1 for data in chart_folders.values()
+        if data["is_chart"] and _is_chart_synced(data, folder_name, sync_state, local_files, delete_videos)
+    )
 
     # If best stats has more charts, we have nested archives
     if best_total_charts > folder_computed_charts:
@@ -392,7 +421,71 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None, sync_sta
         # Adjust for nested archives (1 archive = many charts)
         _adjust_for_nested_archives(
             status, chart_folders, local_files, sync_state,
-            folder, folder_name, folder_path, user_settings
+            folder, folder_name, folder_path, user_settings,
+            delete_videos=delete_videos
         )
+
+    return status
+
+
+def get_setlist_sync_status(
+    folder: dict,
+    setlist_name: str,
+    base_path: Path,
+    sync_state: SyncState = None,
+    delete_videos: bool = True,
+) -> SyncStatus:
+    """
+    Calculate sync status for a single setlist within a folder.
+
+    Uses the same strict per-file check as get_sync_status() to ensure consistency.
+
+    Args:
+        folder: Folder dict from manifest
+        setlist_name: Name of the setlist to check
+        base_path: Base download path
+        sync_state: SyncState for checking synced archives (optional)
+        delete_videos: Whether to exclude video files from size calculations
+
+    Returns:
+        SyncStatus with chart totals and synced counts for just this setlist
+    """
+    status = SyncStatus()
+
+    folder_name = folder.get("name", "")
+    folder_path = base_path / folder_name
+
+    manifest_files = folder.get("files", [])
+    if not manifest_files:
+        return status
+
+    # Filter to only files in this setlist
+    setlist_prefix = f"{setlist_name}/"
+    manifest_files = [
+        f for f in manifest_files
+        if f.get("path", "").startswith(setlist_prefix) or f.get("path", "") == setlist_name
+    ]
+
+    if not manifest_files:
+        return status
+
+    # Deduplicate files with same path, keeping only newest version
+    manifest_files = dedupe_files_by_newest(manifest_files)
+
+    # Build chart folders from manifest
+    chart_folders = _build_chart_folders(manifest_files)
+    local_files = scan_local_files(folder_path)
+
+    # Count charts and check sync status
+    total, synced, total_size, synced_size = _count_synced_charts(
+        chart_folders, local_files, sync_state, folder_name,
+        skip_custom=False,
+        delete_videos=delete_videos,
+    )
+
+    status.total_charts = total
+    status.synced_charts = synced
+    status.total_size = total_size
+    status.synced_size = synced_size
 
     return status

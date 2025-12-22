@@ -360,6 +360,181 @@ class TestStatusMatchesDownloadPlanner:
         assert len(tasks) == 0, "Download planner has tasks"
         assert status.synced_charts == status.total_charts
 
+    def test_status_and_download_agree_when_sync_state_differs_from_disk(self, temp_dir):
+        """
+        CRITICAL: When sync_state says "synced" but disk has different size,
+        both status and download_planner must agree (both trust sync_state).
+
+        This was the root cause of "+1 chart" in UI but "all downloaded" in sync.
+        """
+        from src.sync.download_planner import plan_downloads
+
+        folder_path = temp_dir / "TestDrive" / "Setlist" / "ChartFolder"
+        folder_path.mkdir(parents=True)
+
+        # Create files on disk with DIFFERENT sizes than manifest
+        (folder_path / "song.ini").write_text("[song]")  # 6 bytes
+        (folder_path / "notes.mid").write_bytes(b"midi_modified_content")  # 21 bytes, manifest says 4
+
+        manifest_files = [
+            {"id": "1", "path": "Setlist/ChartFolder/song.ini", "size": 6, "md5": "a"},
+            {"id": "2", "path": "Setlist/ChartFolder/notes.mid", "size": 4, "md5": "b"},  # Disk has 21!
+        ]
+
+        folder = {
+            "folder_id": "test123",
+            "name": "TestDrive",
+            "files": manifest_files,
+        }
+
+        # sync_state says both files are synced with manifest sizes
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+        sync_state.add_file("TestDrive/Setlist/ChartFolder/song.ini", size=6)
+        sync_state.add_file("TestDrive/Setlist/ChartFolder/notes.mid", size=4)  # Matches manifest, not disk
+
+        class MockSettings:
+            delete_videos = True
+            def is_drive_enabled(self, folder_id):
+                return True
+            def get_disabled_subfolders(self, folder_id):
+                return set()
+
+        # What does status say?
+        status = get_sync_status([folder], temp_dir, MockSettings(), sync_state)
+
+        # What does download_planner say?
+        tasks, skipped, _ = plan_downloads(
+            manifest_files,
+            temp_dir / "TestDrive",
+            delete_videos=True,
+            sync_state=sync_state,
+            folder_name="TestDrive",
+        )
+
+        # CRITICAL: They must agree - both trust sync_state, so nothing to download
+        assert len(tasks) == 0, "download_planner should trust sync_state"
+        assert status.missing_charts == 0, "status should also trust sync_state"
+        assert status.synced_charts == status.total_charts, "status should show fully synced"
+
+    def test_status_and_download_agree_when_file_not_in_sync_state(self, temp_dir):
+        """
+        When a file is NOT in sync_state, both should fall back to disk check.
+        """
+        from src.sync.download_planner import plan_downloads
+
+        folder_path = temp_dir / "TestDrive" / "Setlist" / "ChartFolder"
+        folder_path.mkdir(parents=True)
+
+        # Create files on disk - song.ini correct size, notes.mid wrong size
+        (folder_path / "song.ini").write_text("[song]")  # 6 bytes, matches manifest
+        (folder_path / "notes.mid").write_bytes(b"wrong")  # 5 bytes, manifest says 4
+
+        manifest_files = [
+            {"id": "1", "path": "Setlist/ChartFolder/song.ini", "size": 6, "md5": "a"},
+            {"id": "2", "path": "Setlist/ChartFolder/notes.mid", "size": 4, "md5": "b"},
+        ]
+
+        folder = {
+            "folder_id": "test123",
+            "name": "TestDrive",
+            "files": manifest_files,
+        }
+
+        # Empty sync_state - neither file is tracked
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+
+        class MockSettings:
+            delete_videos = True
+            def is_drive_enabled(self, folder_id):
+                return True
+            def get_disabled_subfolders(self, folder_id):
+                return set()
+
+        status = get_sync_status([folder], temp_dir, MockSettings(), sync_state)
+        tasks, skipped, _ = plan_downloads(
+            manifest_files,
+            temp_dir / "TestDrive",
+            delete_videos=True,
+            sync_state=sync_state,
+            folder_name="TestDrive",
+        )
+
+        # Both should fall back to disk: song.ini OK, notes.mid needs download
+        assert len(tasks) == 1, "download_planner should want to download notes.mid"
+        assert status.missing_charts == 1, "status should show 1 chart missing"
+
+    def test_nested_archive_adjustment_respects_delete_videos(self, temp_dir):
+        """
+        REGRESSION TEST: _adjust_for_nested_archives must respect delete_videos.
+
+        The bug: When a folder has subfolders metadata (triggering nested archive
+        adjustment), _adjust_for_nested_archives would recount synced charts but
+        NOT filter out video files. Charts with missing videos were counted as
+        NOT synced in the adjustment, causing +1 discrepancy.
+
+        This test creates a chart with a video file where:
+        - Non-video files are synced
+        - Video file is missing (delete_videos=True)
+        - Folder has subfolders metadata to trigger adjustment
+
+        Expected: Chart should be counted as synced (video excluded).
+        """
+        folder_path = temp_dir / "TestDrive" / "Setlist" / "ChartFolder"
+        folder_path.mkdir(parents=True)
+
+        # Create non-video files on disk, video is missing
+        (folder_path / "song.ini").write_text("[song]")
+        (folder_path / "notes.mid").write_bytes(b"midi")
+
+        manifest_files = [
+            {"id": "1", "path": "Setlist/ChartFolder/song.ini", "size": 6, "md5": "a"},
+            {"id": "2", "path": "Setlist/ChartFolder/notes.mid", "size": 4, "md5": "b"},
+            {"id": "3", "path": "Setlist/ChartFolder/video.webm", "size": 1000000, "md5": "c"},
+        ]
+
+        # Folder with subfolders metadata - this triggers _adjust_for_nested_archives
+        # The subfolders.charts.total must be > number of chart folders to trigger adjustment
+        folder = {
+            "folder_id": "test123",
+            "name": "TestDrive",
+            "files": manifest_files,
+            "subfolders": [
+                {
+                    "name": "Setlist",
+                    "charts": {"total": 5},  # More than 1 chart folder -> triggers adjustment
+                    "total_size": 1000000,
+                }
+            ],
+        }
+
+        # Sync state tracks the non-video files as synced
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+        sync_state.add_file("TestDrive/Setlist/ChartFolder/song.ini", size=6)
+        sync_state.add_file("TestDrive/Setlist/ChartFolder/notes.mid", size=4)
+
+        class MockSettings:
+            delete_videos = True
+            def is_drive_enabled(self, folder_id):
+                return True
+            def is_subfolder_enabled(self, folder_id, subfolder):
+                return True
+            def get_disabled_subfolders(self, folder_id):
+                return set()
+
+        status = get_sync_status([folder], temp_dir, MockSettings(), sync_state)
+
+        # CRITICAL: The chart should be synced because:
+        # 1. Non-video files are in sync_state
+        # 2. Video is excluded when delete_videos=True
+        # 3. _adjust_for_nested_archives must also respect delete_videos
+        assert status.synced_charts == status.total_charts, (
+            f"Chart with missing video should be synced when delete_videos=True. "
+            f"Got {status.synced_charts}/{status.total_charts}"
+        )
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

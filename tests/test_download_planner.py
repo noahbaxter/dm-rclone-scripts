@@ -227,13 +227,12 @@ class TestPlanDownloadsRegularFiles:
 
     def test_sync_state_trusted_without_disk_verification(self, temp_dir):
         """
-        sync_state is trusted without verifying disk.
+        sync_state is trusted for performance - no disk verification when it says synced.
 
-        If sync_state says file is synced with matching size, we trust it.
-        If user modifies files after download, they can delete sync_state.json
-        to force re-verification.
+        This is a critical optimization for HDDs with 100k+ files where random stat()
+        calls would be extremely slow.
         """
-        # Create file on disk with DIFFERENT size than sync_state/manifest
+        # Create file on disk with DIFFERENT size than manifest
         local_file = temp_dir / "folder" / "song.ini"
         local_file.parent.mkdir(parents=True)
         local_file.write_text("modified content here")  # 21 bytes
@@ -243,7 +242,7 @@ class TestPlanDownloadsRegularFiles:
         sync_state.load()
         sync_state.add_file("TestDrive/folder/song.ini", size=100)
 
-        # Manifest says file should be 100 bytes
+        # Manifest says file should be 100 bytes (matches sync_state)
         files = [{"id": "1", "path": "folder/song.ini", "size": 100, "md5": "abc"}]
         tasks, skipped, _ = plan_downloads(
             files, temp_dir, sync_state=sync_state, folder_name="TestDrive"
