@@ -228,7 +228,7 @@ def sort_by_name(items: List[Any], key: Optional[Callable[[Any], str]] = None) -
 # File deduplication
 # ============================================================================
 
-def dedupe_files_by_newest(files: list) -> list:
+def dedupe_files_by_newest(files: list, case_insensitive: bool = False) -> list:
     """
     Deduplicate files with same path, keeping only newest version.
 
@@ -238,6 +238,8 @@ def dedupe_files_by_newest(files: list) -> list:
 
     Args:
         files: List of file dicts with "path" and "modified" keys
+        case_insensitive: If True, treat paths differing only by case as duplicates
+                          (needed for Windows compatibility)
 
     Returns:
         Deduplicated list with only newest version of each path
@@ -248,7 +250,36 @@ def dedupe_files_by_newest(files: list) -> list:
         # Use sanitized path as key - paths that differ only by illegal chars
         # (like trailing spaces) should be treated as duplicates
         key = sanitize_path(path)
+        if case_insensitive:
+            key = key.lower()
         modified = f.get("modified", "")
         if key not in by_path or modified > by_path[key].get("modified", ""):
             by_path[key] = f
     return list(by_path.values())
+
+
+def normalize_manifest_files(files: list) -> list:
+    """
+    Normalize and dedupe files for manifest generation.
+
+    Applies three cleanup steps:
+    1. Normalize paths to NFC Unicode (macOS uses NFD, Windows uses NFC)
+    2. Sanitize illegal characters for cross-platform compatibility
+    3. Dedupe case-insensitively, keeping newest version (Windows is case-insensitive)
+
+    Args:
+        files: List of file dicts with "path" and "modified" keys
+
+    Returns:
+        Cleaned and deduplicated list
+    """
+    # Normalize and sanitize paths in place
+    for f in files:
+        if "path" in f:
+            # NFC normalize (macOS returns NFD from API sometimes)
+            f["path"] = unicodedata.normalize("NFC", f["path"])
+            # Sanitize illegal chars for cross-platform compatibility
+            f["path"] = sanitize_path(f["path"])
+
+    # Dedupe case-insensitively (Windows filesystem is case-insensitive)
+    return dedupe_files_by_newest(files, case_insensitive=True)

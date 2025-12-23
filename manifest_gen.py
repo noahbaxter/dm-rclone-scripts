@@ -26,7 +26,7 @@ from src.drive import DriveClient, FolderScanner, OAuthManager, ChangeTracker
 from src.drive.client import DriveClientConfig
 from src.manifest import Manifest, FolderEntry, count_charts_in_files
 from src.config import DrivesConfig
-from src.core.formatting import format_size, format_duration
+from src.core.formatting import format_size, format_duration, normalize_manifest_files
 from src.ui.primitives import print_progress
 
 # ============================================================================
@@ -138,6 +138,9 @@ def generate_full(force_rescan: bool = False):
 
         result = scanner.scan(folder_id, "", progress)
         print()
+
+        # Normalize paths: NFC Unicode, sanitize chars, dedupe case-insensitively
+        result.files = normalize_manifest_files(result.files)
 
         elapsed = time.time() - start_time
         calls_used = client.api_calls - start_api_calls
@@ -535,6 +538,13 @@ def generate_incremental():
         manifest.save()
         print(f"  Token updated. Total API calls: {total_api}")
         return
+
+    # Normalize all folder files before saving
+    # (NFC Unicode, sanitize chars, dedupe case-insensitively)
+    for folder in manifest.folders:
+        folder.files = normalize_manifest_files(folder.files)
+        folder.file_count = len(folder.files)
+        folder.total_size = sum(f.get("size", 0) for f in folder.files)
 
     # Save manifest
     manifest.save()

@@ -9,6 +9,7 @@ from src.core.formatting import (
     sanitize_path,
     normalize_fs_name,
     dedupe_files_by_newest,
+    normalize_manifest_files,
     format_size,
     format_duration,
     to_posix,
@@ -253,6 +254,87 @@ class TestDedupeFilesByNewest:
     def test_empty_list_returns_empty(self):
         """Empty input returns empty output."""
         assert dedupe_files_by_newest([]) == []
+
+    def test_case_insensitive_dedup(self):
+        """
+        Case-insensitive mode treats paths differing only by case as duplicates.
+        This is critical for Windows where 'Carol of' and 'Carol Of' are the same.
+        """
+        files = [
+            {"path": "Carol of the Bells/song.zip", "modified": "2022-01-01T00:00:00Z", "md5": "older"},
+            {"path": "Carol Of The Bells/song.zip", "modified": "2023-01-01T00:00:00Z", "md5": "newer"},
+        ]
+        result = dedupe_files_by_newest(files, case_insensitive=True)
+        assert len(result) == 1
+        assert result[0]["md5"] == "newer"
+
+    def test_case_sensitive_keeps_both(self):
+        """Default case-sensitive mode keeps paths that differ only by case."""
+        files = [
+            {"path": "Carol of the Bells/song.zip", "modified": "2022-01-01T00:00:00Z"},
+            {"path": "Carol Of The Bells/song.zip", "modified": "2023-01-01T00:00:00Z"},
+        ]
+        result = dedupe_files_by_newest(files, case_insensitive=False)
+        assert len(result) == 2
+        # Verify both distinct paths are preserved
+        paths = {f["path"] for f in result}
+        assert "Carol of the Bells/song.zip" in paths
+        assert "Carol Of The Bells/song.zip" in paths
+
+
+class TestNormalizeManifestFiles:
+    """Tests for normalize_manifest_files() - manifest path cleanup."""
+
+    def test_case_insensitive_dedup(self):
+        """Dedupes paths that differ only by case, keeping newest."""
+        files = [
+            {"path": "Carol of the Bells/song.ini", "modified": "2024-01-01", "size": 100},
+            {"path": "Carol Of The Bells/song.ini", "modified": "2024-01-15", "size": 150},
+            {"path": "Normal/song.ini", "modified": "2024-01-01", "size": 200},
+        ]
+        result = normalize_manifest_files(files)
+        assert len(result) == 2
+        carol = [f for f in result if "carol" in f["path"].lower()][0]
+        assert carol["modified"] == "2024-01-15"  # Newer kept
+
+    def test_nfd_normalized_to_nfc(self):
+        """NFD Unicode paths are normalized to NFC."""
+        import unicodedata
+        nfd_name = unicodedata.normalize("NFD", "Bôa - Duvet")
+        nfc_name = unicodedata.normalize("NFC", "Bôa - Duvet")
+        files = [{"path": f"{nfd_name}/song.ini", "modified": "2024-01-01", "size": 100}]
+        result = normalize_manifest_files(files)
+        assert result[0]["path"].split("/")[0] == nfc_name
+
+    def test_illegal_chars_sanitized(self):
+        """Illegal characters are sanitized."""
+        files = [{"path": "Song: The Remix/song.ini", "modified": "2024-01-01", "size": 100}]
+        result = normalize_manifest_files(files)
+        assert ":" not in result[0]["path"]
+        assert "Song - The Remix" in result[0]["path"]
+
+    def test_empty_list(self):
+        """Empty input returns empty output."""
+        assert normalize_manifest_files([]) == []
+
+    def test_unicode_and_case_combined(self):
+        """NFD/NFC + case differences should all dedupe to one file."""
+        import unicodedata
+        # Same name in 4 variations: NFD vs NFC, lowercase vs uppercase
+        nfd_lower = unicodedata.normalize("NFD", "bôa - duvet")
+        nfc_lower = unicodedata.normalize("NFC", "bôa - duvet")
+        nfd_upper = unicodedata.normalize("NFD", "Bôa - Duvet")
+        nfc_upper = unicodedata.normalize("NFC", "Bôa - Duvet")
+
+        files = [
+            {"path": f"{nfd_lower}/song.ini", "modified": "2024-01-01", "size": 100},
+            {"path": f"{nfc_lower}/song.ini", "modified": "2024-01-02", "size": 100},
+            {"path": f"{nfd_upper}/song.ini", "modified": "2024-01-03", "size": 100},
+            {"path": f"{nfc_upper}/song.ini", "modified": "2024-01-04", "size": 100},  # Newest
+        ]
+        result = normalize_manifest_files(files)
+        assert len(result) == 1, f"Expected 1 file after dedupe, got {len(result)}"
+        assert result[0]["modified"] == "2024-01-04"  # Newest kept
 
 
 class TestFormatSize:
