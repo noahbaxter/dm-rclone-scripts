@@ -65,34 +65,35 @@ CHECKSUM_FILE = "check.txt"
 
 def fix_permissions(folder_path: Path) -> int:
     """
-    Recursively fix read-only folders to be writable.
+    Recursively fix restrictive permissions on extracted content.
 
     Some archives (especially RAR) preserve restrictive Unix permissions (555).
-    This causes issues with moving/deleting extracted content.
+    This causes issues with reading/moving/deleting extracted content.
 
-    Returns count of folders fixed.
+    Returns count of items fixed.
     """
     import stat
     fixed = 0
+    # Permissions we need: read + write for owner
+    needed = stat.S_IRUSR | stat.S_IWUSR
     try:
         for root, dirs, files in os.walk(folder_path):
             for d in dirs:
                 dp = Path(root) / d
                 try:
                     mode = dp.stat().st_mode
-                    # Add write permission for owner if missing
-                    if not (mode & stat.S_IWUSR):
-                        dp.chmod(mode | stat.S_IWUSR)
+                    if (mode & needed) != needed:
+                        dp.chmod(mode | needed)
                         fixed += 1
                 except (OSError, PermissionError):
                     pass
-            # Also fix files that might be read-only
             for f in files:
                 fp = Path(root) / f
                 try:
                     mode = fp.stat().st_mode
-                    if not (mode & stat.S_IWUSR):
-                        fp.chmod(mode | stat.S_IWUSR)
+                    if (mode & needed) != needed:
+                        fp.chmod(mode | needed)
+                        fixed += 1
                 except (OSError, PermissionError):
                     pass
     except Exception:
