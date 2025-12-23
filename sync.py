@@ -141,24 +141,22 @@ class SyncApp:
             if self.user_settings.is_drive_enabled(self.folders[i].get("folder_id", ""))
         ]
 
-        if not enabled_indices:
-            print("\nNo drives enabled. Enable at least one drive to sync.")
-            return
+        # Download enabled drives (skip if none enabled)
+        if enabled_indices:
+            # Scan custom folders that need scanning (no files yet)
+            self._scan_custom_folders_if_needed(enabled_indices)
 
-        # Scan custom folders that need scanning (no files yet)
-        self._scan_custom_folders_if_needed(enabled_indices)
+            # Get disabled subfolders for filtering
+            disabled_map = self._get_disabled_subfolders_for_folders(enabled_indices)
 
-        # Get disabled subfolders for filtering
-        disabled_map = self._get_disabled_subfolders_for_folders(enabled_indices)
+            # Step 1: Download missing files
+            was_cancelled = self.sync.download_folders(self.folders, enabled_indices, get_download_path(), disabled_map)
+            clear_scan_cache()  # Invalidate filesystem cache after download
+            self.folder_stats_cache.invalidate_all()  # Invalidate all folder stats
 
-        # Step 1: Download missing files
-        was_cancelled = self.sync.download_folders(self.folders, enabled_indices, get_download_path(), disabled_map)
-        clear_scan_cache()  # Invalidate filesystem cache after download
-        self.folder_stats_cache.invalidate_all()  # Invalidate all folder stats
-
-        # If cancelled, don't purge - just return (wait already happened in download_folders)
-        if was_cancelled:
-            return
+            # If cancelled, don't purge - just return (wait already happened in download_folders)
+            if was_cancelled:
+                return
 
         # Step 2: Purge extra files (no confirmation - sync means make it match)
         stats = count_purgeable_detailed(
