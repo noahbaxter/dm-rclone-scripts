@@ -419,5 +419,201 @@ class TestProcessArchiveIntegration:
             )
 
 
+    def test_process_archive_flattens_case_mismatched_folder(self, temp_dir):
+        """
+        Archive with internal folder differing by case from archive name gets flattened.
+
+        This is the "Carol of the Bells" bug: archive "Carol of the Bells.zip" contains
+        folder "Carol Of The Bells/". Without flattening, we'd get nested:
+            Carol of the Bells/Carol Of The Bells/song.ini
+        With flattening, we get:
+            Carol of the Bells/song.ini
+        """
+        from src.sync.downloader import FileDownloader, DownloadTask
+        from src.sync.state import SyncState
+        from src.sync.cache import scan_local_files
+
+        drive_path = temp_dir / "TestDrive" / "Misc"
+        drive_path.mkdir(parents=True)
+
+        # Create archive with case-mismatched internal folder
+        # Archive stem: "Carol of the Bells"
+        # Internal folder: "Carol Of The Bells" (different case!)
+        archive_path = drive_path / "_download_Carol of the Bells.zip"
+        self._create_test_archive(archive_path, {
+            "Carol Of The Bells/song.ini": "[song]\nname=Carol Test",
+            "Carol Of The Bells/notes.mid": b"MThd",
+        })
+
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+
+        downloader = FileDownloader(delete_videos=False)
+        task = DownloadTask(
+            file_id="carol",
+            local_path=archive_path,
+            size=archive_path.stat().st_size,
+            md5="carol123",
+            is_archive=True,
+            rel_path="TestDrive/Misc/Carol of the Bells.zip"
+        )
+
+        success, error, extracted = downloader.process_archive(
+            task, sync_state, archive_rel_path="TestDrive/Misc/Carol of the Bells.zip"
+        )
+
+        assert success, f"Case mismatch extraction failed: {error}"
+
+        # Files should be FLAT, not nested
+        local_files = scan_local_files(drive_path)
+
+        # Should have files directly, not in nested subfolder
+        assert "song.ini" in local_files, (
+            f"Expected flattened 'song.ini', got: {list(local_files.keys())}"
+        )
+        assert "notes.mid" in local_files, (
+            f"Expected flattened 'notes.mid', got: {list(local_files.keys())}"
+        )
+
+        # Should NOT have nested folder structure
+        nested_path = "Carol Of The Bells/song.ini"
+        assert nested_path not in local_files, (
+            f"Files should be flattened, but found nested: {nested_path}"
+        )
+
+        # CRITICAL: extracted_files dict must also have flattened paths
+        # This dict is passed to sync_state.add_archive() for tracking
+        assert "song.ini" in extracted, (
+            f"extracted_files should have flattened paths, got: {list(extracted.keys())}"
+        )
+        assert nested_path not in extracted, (
+            f"extracted_files should NOT have nested paths, got: {list(extracted.keys())}"
+        )
+
+    def test_process_archive_no_flatten_different_name(self, temp_dir):
+        """Archive with folder name NOT matching archive name should NOT flatten."""
+        from src.sync.downloader import FileDownloader, DownloadTask
+        from src.sync.state import SyncState
+        from src.sync.cache import scan_local_files
+
+        drive_path = temp_dir / "TestDrive" / "Misc"
+        drive_path.mkdir(parents=True)
+
+        # Archive stem: "my_chart"
+        # Internal folder: "Completely Different Name" (doesn't match!)
+        archive_path = drive_path / "_download_my_chart.zip"
+        self._create_test_archive(archive_path, {
+            "Completely Different Name/song.ini": "[song]",
+            "Completely Different Name/notes.mid": b"MThd",
+        })
+
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+
+        downloader = FileDownloader(delete_videos=False)
+        task = DownloadTask(
+            file_id="mychart",
+            local_path=archive_path,
+            size=archive_path.stat().st_size,
+            md5="mychart123",
+            is_archive=True,
+            rel_path="TestDrive/Misc/my_chart.zip"
+        )
+
+        success, error, _ = downloader.process_archive(
+            task, sync_state, archive_rel_path="TestDrive/Misc/my_chart.zip"
+        )
+
+        assert success, f"Extraction failed: {error}"
+
+        # Files should be in the subfolder (NOT flattened)
+        local_files = scan_local_files(drive_path)
+
+        assert "Completely Different Name/song.ini" in local_files, (
+            f"Expected nested structure, got: {list(local_files.keys())}"
+        )
+
+
+    def test_process_archive_no_flatten_multiple_folders(self, temp_dir):
+        """Archive with multiple top-level folders should NOT flatten."""
+        from src.sync.downloader import FileDownloader, DownloadTask
+        from src.sync.state import SyncState
+        from src.sync.cache import scan_local_files
+
+        drive_path = temp_dir / "TestDrive" / "Misc"
+        drive_path.mkdir(parents=True)
+
+        # Archive with TWO top-level folders - should not flatten
+        archive_path = drive_path / "_download_multi_chart.zip"
+        self._create_test_archive(archive_path, {
+            "Chart One/song.ini": "[song]\nname=One",
+            "Chart Two/song.ini": "[song]\nname=Two",
+        })
+
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+
+        downloader = FileDownloader(delete_videos=False)
+        task = DownloadTask(
+            file_id="multi",
+            local_path=archive_path,
+            size=archive_path.stat().st_size,
+            md5="multi123",
+            is_archive=True,
+            rel_path="TestDrive/Misc/multi_chart.zip"
+        )
+
+        success, error, _ = downloader.process_archive(
+            task, sync_state, archive_rel_path="TestDrive/Misc/multi_chart.zip"
+        )
+
+        assert success, f"Multi-folder extraction failed: {error}"
+
+        # Both folders should exist (not flattened)
+        local_files = scan_local_files(drive_path)
+        assert "Chart One/song.ini" in local_files, f"Missing Chart One: {list(local_files.keys())}"
+        assert "Chart Two/song.ini" in local_files, f"Missing Chart Two: {list(local_files.keys())}"
+
+    def test_process_archive_loose_files_no_folder(self, temp_dir):
+        """Archive with loose files (no folder) should extract directly."""
+        from src.sync.downloader import FileDownloader, DownloadTask
+        from src.sync.state import SyncState
+        from src.sync.cache import scan_local_files
+
+        drive_path = temp_dir / "TestDrive" / "Misc"
+        drive_path.mkdir(parents=True)
+
+        # Archive with files at root, no containing folder
+        archive_path = drive_path / "_download_loose_chart.zip"
+        self._create_test_archive(archive_path, {
+            "song.ini": "[song]\nname=Loose",
+            "notes.mid": b"MThd",
+        })
+
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+
+        downloader = FileDownloader(delete_videos=False)
+        task = DownloadTask(
+            file_id="loose",
+            local_path=archive_path,
+            size=archive_path.stat().st_size,
+            md5="loose123",
+            is_archive=True,
+            rel_path="TestDrive/Misc/loose_chart.zip"
+        )
+
+        success, error, _ = downloader.process_archive(
+            task, sync_state, archive_rel_path="TestDrive/Misc/loose_chart.zip"
+        )
+
+        assert success, f"Loose files extraction failed: {error}"
+
+        # Files should be directly in drive_path (the chart folder)
+        local_files = scan_local_files(drive_path)
+        assert "song.ini" in local_files, f"Missing song.ini: {list(local_files.keys())}"
+        assert "notes.mid" in local_files, f"Missing notes.mid: {list(local_files.keys())}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

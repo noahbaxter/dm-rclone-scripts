@@ -308,16 +308,45 @@ class FileDownloader:
             extracted_files = scan_extracted_files(extract_tmp, extract_tmp)
 
             # Step 4: Move extracted contents to chart_folder
-            # Move each top-level item from temp to chart_folder
-            for item in extract_tmp.iterdir():
-                dest = chart_folder / normalize_fs_name(item.name)
-                # Remove existing destination if it exists
-                if dest.exists():
-                    if dest.is_dir():
-                        shutil.rmtree(dest)
-                    else:
-                        dest.unlink()
-                shutil.move(str(item), str(dest))
+            # Check if we should flatten: single folder matching archive name (case-insensitive)
+            # This handles archives like "Carol of the Bells.zip" containing "Carol Of The Bells/"
+            extracted_items = list(extract_tmp.iterdir())
+            should_flatten = False
+            flatten_folder = None
+
+            if len(extracted_items) == 1 and extracted_items[0].is_dir():
+                folder_name = normalize_fs_name(extracted_items[0].name)
+                # Case-insensitive comparison to handle "Carol of" vs "Carol Of"
+                if folder_name.lower() == archive_stem.lower():
+                    should_flatten = True
+                    flatten_folder = extracted_items[0]
+
+            if should_flatten and flatten_folder:
+                # Flatten: move folder CONTENTS directly to chart_folder
+                # Also fix extracted_files paths to match actual locations
+                folder_prefix = normalize_fs_name(flatten_folder.name) + "/"
+                extracted_files = {
+                    (path[len(folder_prefix):] if path.startswith(folder_prefix) else path): size
+                    for path, size in extracted_files.items()
+                }
+                for item in flatten_folder.iterdir():
+                    dest = chart_folder / normalize_fs_name(item.name)
+                    if dest.exists():
+                        if dest.is_dir():
+                            shutil.rmtree(dest)
+                        else:
+                            dest.unlink()
+                    shutil.move(str(item), str(dest))
+            else:
+                # Normal: move each top-level item to chart_folder
+                for item in extracted_items:
+                    dest = chart_folder / normalize_fs_name(item.name)
+                    if dest.exists():
+                        if dest.is_dir():
+                            shutil.rmtree(dest)
+                        else:
+                            dest.unlink()
+                    shutil.move(str(item), str(dest))
 
             # Clean up empty temp folder
             shutil.rmtree(extract_tmp, ignore_errors=True)
