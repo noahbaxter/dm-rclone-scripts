@@ -135,35 +135,27 @@ jobs:
         with:
           path: artifacts
 
-      - name: Create Release
+      - name: Create or Update Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           VERSION="${{ steps.version.outputs.version }}"
 
-          cat << 'EOF' > notes.md
-          ## Synchotic ${{ steps.version.outputs.version }}
-
-          ### Downloads
-          - **Windows**: `synchotic.exe`
-          - **macOS**: `synchotic-macos` (run `chmod +x synchotic-macos` after downloading)
-
-          ### Features
-          - Zero-setup chart downloads from Google Drive
-          - Smart sync (only downloads new/changed files)
-          - Pause/Stop with ESC key
-          - Setlist filtering (choose which setlists to sync)
-          - Custom download paths
-          - Parallel downloads
-          EOF
-
-          gh release view "$VERSION" && gh release delete "$VERSION" --yes || true
-          gh release create "$VERSION" \
-            --title "Synchotic $VERSION" \
-            --notes-file notes.md \
-            artifacts/synchotic-macos/synchotic-macos \
-            artifacts/synchotic.exe/synchotic.exe
+          if gh release view "$VERSION" > /dev/null 2>&1; then
+            # Release exists - just update assets, preserve notes
+            gh release upload "$VERSION" \
+              artifacts/synchotic-macos/synchotic-macos \
+              artifacts/synchotic.exe/synchotic.exe \
+              --clobber
+          else
+            # New release - create with default notes
+            gh release create "$VERSION" \
+              --title "Synchotic $VERSION" \
+              --notes "Release $VERSION" \
+              artifacts/synchotic-macos/synchotic-macos \
+              artifacts/synchotic.exe/synchotic.exe
+          fi
 
       - name: Summary
         run: |
