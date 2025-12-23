@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import aiohttp
 
 from ..core.constants import VIDEO_EXTENSIONS
-from ..core.formatting import extract_path_context, format_download_name
+from ..core.formatting import extract_path_context, format_download_name, normalize_fs_name
 from ..core.paths import get_extract_tmp_dir, get_certifi_ssl_context
 from .extractor import extract_archive, get_folder_size, delete_video_files, scan_extracted_files
 from .download_planner import DownloadTask
@@ -310,7 +310,7 @@ class FileDownloader:
             # Step 4: Move extracted contents to chart_folder
             # Move each top-level item from temp to chart_folder
             for item in extract_tmp.iterdir():
-                dest = chart_folder / item.name
+                dest = chart_folder / normalize_fs_name(item.name)
                 # Remove existing destination if it exists
                 if dest.exists():
                     if dest.is_dir():

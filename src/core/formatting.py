@@ -9,6 +9,19 @@ from typing import Any, Callable, List, Optional, Union
 
 
 # ============================================================================
+# Unicode normalization
+# ============================================================================
+
+def normalize_fs_name(name: str) -> str:
+    """Normalize filesystem name to NFC for cross-platform consistency.
+
+    macOS returns NFD (decomposed), Windows/manifest use NFC (composed).
+    Without normalization, "Pokémon" (NFD) won't match "Pokémon" (NFC).
+    """
+    return unicodedata.normalize("NFC", name)
+
+
+# ============================================================================
 # Filename sanitization (cross-platform)
 # ============================================================================
 

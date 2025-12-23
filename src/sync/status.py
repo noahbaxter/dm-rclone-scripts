@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..core.constants import CHART_MARKERS, CHART_ARCHIVE_EXTENSIONS, VIDEO_EXTENSIONS
-from ..core.formatting import sanitize_path, dedupe_files_by_newest
+from ..core.formatting import sanitize_path, dedupe_files_by_newest, normalize_fs_name
 from ..stats import get_best_stats
 from .cache import scan_local_files, scan_actual_charts
 from .state import SyncState
@@ -371,11 +371,12 @@ def get_sync_status(folders: list, base_path: Path, user_settings=None, sync_sta
                 try:
                     for entry in os.scandir(folder_path):
                         if entry.is_dir() and not entry.name.startswith('.'):
-                            if disabled_setlists and entry.name in disabled_setlists:
+                            name = normalize_fs_name(entry.name)
+                            if disabled_setlists and name in disabled_setlists:
                                 continue
                             setlist_charts, setlist_size = scan_actual_charts(Path(entry.path), set())
                             if setlist_charts > 0:
-                                downloaded_setlist_sizes[entry.name] = setlist_size
+                                downloaded_setlist_sizes[name] = setlist_size
                 except OSError:
                     pass
 

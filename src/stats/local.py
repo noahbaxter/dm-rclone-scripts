@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..core.constants import CHART_MARKERS
+from ..core.formatting import normalize_fs_name
 
 
 @dataclass
@@ -183,8 +184,9 @@ class LocalStatsScanner:
                 for entry in entries:
                     if entry.is_dir(follow_symlinks=False):
                         setlist_stats = self._scan_setlist(Path(entry.path))
-                        setlist_stats.name = entry.name
-                        stats.setlists[entry.name] = setlist_stats
+                        name = normalize_fs_name(entry.name)
+                        setlist_stats.name = name
+                        stats.setlists[name] = setlist_stats
                         stats.total_charts += setlist_stats.chart_count
                         stats.total_size += setlist_stats.total_size
                         # Cache individual setlist

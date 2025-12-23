@@ -355,6 +355,69 @@ class TestProcessArchiveIntegration:
             f"local: {sorted(local_files.keys())}"
         )
 
+    def test_process_archive_nfd_folder_normalized_to_nfc(self, temp_dir):
+        """
+        Archive with NFD Unicode folder name gets normalized to NFC during extraction.
+
+        This is the "Bôa - Duvet" bug fix: macOS returns NFD from iterdir() but
+        the manifest uses NFC. Without normalization, files keep re-downloading
+        and purge fails because paths don't match.
+        """
+        import unicodedata
+        from src.sync.downloader import FileDownloader, DownloadTask
+        from src.sync.state import SyncState
+        from src.sync.cache import scan_local_files
+
+        drive_path = temp_dir / "TestDrive" / "Misc"
+        drive_path.mkdir(parents=True)
+
+        # Create archive with NFD folder name (how macOS might create it)
+        nfd_folder = unicodedata.normalize("NFD", "Bôa - Duvet")
+        nfc_folder = unicodedata.normalize("NFC", "Bôa - Duvet")
+
+        # Verify they're different
+        assert nfd_folder != nfc_folder, "Test requires different NFD/NFC representations"
+
+        archive_path = drive_path / "_download_boa.zip"
+        self._create_test_archive(archive_path, {
+            f"{nfd_folder}/song.ini": "[song]\nname=Duvet",
+            f"{nfd_folder}/notes.mid": b"MThd",
+        })
+
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+
+        downloader = FileDownloader(delete_videos=False)
+        task = DownloadTask(
+            file_id="boa",
+            local_path=archive_path,
+            size=archive_path.stat().st_size,
+            md5="boa123",
+            is_archive=True,
+            rel_path="TestDrive/Misc/boa.zip"
+        )
+
+        success, error, _ = downloader.process_archive(
+            task, sync_state, archive_rel_path="TestDrive/Misc/boa.zip"
+        )
+
+        assert success, f"NFD extraction failed: {error}"
+
+        # The extracted folder should be NFC (normalized), not NFD
+        nfc_path = drive_path / nfc_folder
+        nfd_path = drive_path / nfd_folder
+
+        # On macOS, the NFC path should exist (or be equivalent)
+        # The key assertion: scan_local_files should return NFC paths
+        local_files = scan_local_files(drive_path)
+
+        # All paths should use NFC folder name, not NFD
+        for path in local_files.keys():
+            folder_part = path.split("/")[0]
+            assert folder_part == nfc_folder, (
+                f"Expected NFC folder '{nfc_folder}', got '{folder_part}' (NFD={nfd_folder})"
+            )
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

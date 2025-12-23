@@ -7,6 +7,7 @@ import pytest
 from src.core.formatting import (
     sanitize_filename,
     sanitize_path,
+    normalize_fs_name,
     dedupe_files_by_newest,
     format_size,
     format_duration,
@@ -112,6 +113,42 @@ class TestSanitizeFilename:
         # But sanitize_filename should normalize both to NFC
         assert sanitize_filename(nfc_name) == sanitize_filename(nfd_name)
         assert sanitize_filename(nfd_name) == "Pokémon"  # NFC output
+
+
+class TestNormalizeFsName:
+    """Tests for normalize_fs_name() - filesystem name normalization."""
+
+    def test_nfd_normalized_to_nfc(self):
+        """NFD (decomposed) names are normalized to NFC (composed)."""
+        import unicodedata
+
+        # Various accented characters that decompose differently
+        test_cases = [
+            "Pokémon",      # é (U+00E9)
+            "Bôa",          # ô (U+00F4)
+            "Gérard",       # é (U+00E9)
+            "Déjà Vu",      # é (U+00E9), à (U+00E0)
+        ]
+
+        for name in test_cases:
+            nfc = unicodedata.normalize("NFC", name)
+            nfd = unicodedata.normalize("NFD", name)
+
+            # NFD should be different bytes than NFC
+            assert nfc != nfd, f"{name}: NFC and NFD should differ"
+
+            # Both should normalize to NFC
+            assert normalize_fs_name(nfc) == nfc
+            assert normalize_fs_name(nfd) == nfc
+
+    def test_ascii_unchanged(self):
+        """ASCII names pass through unchanged."""
+        assert normalize_fs_name("simple_name") == "simple_name"
+        assert normalize_fs_name("Chart - Song") == "Chart - Song"
+
+    def test_already_nfc_unchanged(self):
+        """NFC names pass through unchanged."""
+        assert normalize_fs_name("Pokémon") == "Pokémon"
 
 
 class TestSanitizePath:

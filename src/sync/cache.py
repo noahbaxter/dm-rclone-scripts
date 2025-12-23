@@ -6,12 +6,12 @@ Cache is invalidated after downloads/purges.
 """
 
 import os
-import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..stats import clear_local_stats_cache
+from ..core.formatting import normalize_fs_name
 
 if TYPE_CHECKING:
     from .status import SyncStatus
@@ -112,8 +112,7 @@ def scan_local_files(folder_path: Path) -> dict[str, int]:
         try:
             with os.scandir(dir_path) as entries:
                 for entry in entries:
-                    # Normalize to NFC - macOS returns NFD which won't match sync_state/manifest
-                    name = unicodedata.normalize("NFC", entry.name)
+                    name = normalize_fs_name(entry.name)
                     rel_path = f"{prefix}{name}" if prefix else name
                     if entry.is_file(follow_symlinks=False):
                         try:
