@@ -155,9 +155,11 @@ class FolderSync:
         rate_limited_folders: set[str] = set()
         start_time = time.time()
 
-        for idx in indices:
+        total_folders = len(indices)
+        for i, idx in enumerate(indices, 1):
             folder = folders[idx]
-            print_section_header(folder['name'])
+            header = f"[{i}/{total_folders}] {folder['name']}" if total_folders > 1 else folder['name']
+            print_section_header(header)
 
             # Get disabled prefixes for this specific folder
             folder_id = folder.get("folder_id", "")
