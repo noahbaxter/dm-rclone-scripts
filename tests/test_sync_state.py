@@ -202,12 +202,43 @@ class TestGetSyncStatusWithSyncState:
         assert status.synced_charts == 1
         assert status.total_charts == 1
 
-    def test_archive_not_synced_without_sync_state(self, temp_dir):
-        """Without sync_state (and no check.txt), archive shows as not synced."""
+    def test_archive_synced_via_disk_fallback(self, temp_dir):
+        """Archive with chart markers on disk shows synced even without sync_state.
+
+        This tests the disk fallback: if chart files exist on disk, we don't
+        re-download even if sync_state is missing/corrupted.
+        """
         folder_path = temp_dir / "TestDrive" / "Setlist"
         folder_path.mkdir(parents=True)
 
+        # Chart markers exist on disk
         (folder_path / "song.ini").write_text("[song]")
+
+        folder = {
+            "folder_id": "test123",
+            "name": "TestDrive",
+            "files": [
+                {
+                    "path": "Setlist/pack.7z",
+                    "md5": "test_md5_hash",
+                    "size": 5000
+                }
+            ]
+        }
+
+        # No sync_state, but files exist on disk
+        status = get_sync_status([folder], temp_dir, None, None)
+
+        # Should show as synced due to disk fallback
+        assert status.synced_charts == 1
+        assert status.total_charts == 1
+
+    def test_archive_not_synced_without_files(self, temp_dir):
+        """Archive without files on disk shows as not synced."""
+        folder_path = temp_dir / "TestDrive" / "Setlist"
+        folder_path.mkdir(parents=True)
+
+        # No chart markers on disk - folder is empty
 
         folder = {
             "folder_id": "test123",
@@ -223,6 +254,48 @@ class TestGetSyncStatusWithSyncState:
 
         status = get_sync_status([folder], temp_dir, None, None)
 
+        # Should show as not synced - no files on disk
+        assert status.synced_charts == 0
+        assert status.total_charts == 1
+
+    def test_archive_update_not_skipped_by_disk_fallback(self, temp_dir):
+        """When archive has new MD5 (update available), disk fallback should NOT skip it.
+
+        This ensures updates are downloaded even if old files exist on disk.
+        """
+        folder_path = temp_dir / "TestDrive" / "Setlist"
+        folder_path.mkdir(parents=True)
+
+        # Old chart files exist on disk
+        (folder_path / "song.ini").write_text("[song]\nversion=old")
+
+        # sync_state has OLD version
+        sync_state = SyncState(temp_dir)
+        sync_state.load()
+        sync_state.add_archive(
+            path="TestDrive/Setlist/pack.7z",
+            md5="old_md5_hash",  # OLD MD5
+            archive_size=5000,
+            files={"song.ini": 100}
+        )
+        sync_state.save()
+
+        # Manifest has NEW version
+        folder = {
+            "folder_id": "test123",
+            "name": "TestDrive",
+            "files": [
+                {
+                    "path": "Setlist/pack.7z",
+                    "md5": "new_md5_hash",  # NEW MD5 - update available!
+                    "size": 6000
+                }
+            ]
+        }
+
+        status = get_sync_status([folder], temp_dir, None, sync_state)
+
+        # Should show as NOT synced - update available, don't skip via disk fallback
         assert status.synced_charts == 0
         assert status.total_charts == 1
 
