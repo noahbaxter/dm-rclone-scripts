@@ -6,6 +6,7 @@ import requests
 
 from ..core.paths import get_manifest_path
 from ..core.formatting import sanitize_path
+from ..ui.widgets import display
 from .manifest import Manifest
 
 # Remote manifest URL (GitHub releases)
@@ -50,9 +51,7 @@ def fetch_manifest(use_local: bool = False) -> dict:
         is_online, network_error = check_network()
 
         if not is_online:
-            print(f"\nError: {network_error}")
-            print("This app requires an internet connection to download charts.")
-            print("Please check your connection and try again.\n")
+            display.error_offline(network_error)
             raise SystemExit(1)
 
         # Network is up, try to fetch manifest
@@ -61,11 +60,11 @@ def fetch_manifest(use_local: bool = False) -> dict:
             response.raise_for_status()
             return _sanitize_manifest_paths(response.json())
         except requests.HTTPError as e:
-            print(f"Warning: Failed to fetch manifest (HTTP {e.response.status_code})")
+            display.error_manifest_http(e.response.status_code)
         except requests.Timeout:
-            print("Warning: Manifest fetch timed out")
+            display.error_manifest_timeout()
         except Exception as e:
-            print(f"Warning: Manifest fetch error: {e}")
+            display.error_manifest_generic(str(e))
 
         # Fetch failed - exit since we can't get the manifest
         print("Please try again later.\n")
@@ -76,5 +75,5 @@ def fetch_manifest(use_local: bool = False) -> dict:
         manifest = Manifest.load(local_path)
         return _sanitize_manifest_paths(manifest.to_dict())
 
-    print("Error: Local manifest not found.\n")
+    display.error_no_local_manifest()
     return {"folders": []}

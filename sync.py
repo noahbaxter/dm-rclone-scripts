@@ -40,6 +40,7 @@ from src.ui import (
 )
 from src.sync import FolderStatsCache, count_purgeable_detailed, clear_scan_cache
 from src.ui.primitives import clear_screen, wait_with_skip
+from src.ui.widgets import display
 from src.ui.primitives.terminal import set_terminal_size
 from src.core.logging import TeeOutput
 from src.drive.client import DriveClientConfig
@@ -253,10 +254,7 @@ class SyncApp:
         folder_id = folder.get("folder_id")
         folder_name = folder.get("name")
 
-        print()
-        print("=" * 50)
-        print(f"Scanning: {folder_name}")
-        print("=" * 50)
+        display.scan_header(folder_name)
 
         auth_token = self.auth.get_token()
         client_config = DriveClientConfig(api_key=API_KEY)
@@ -328,9 +326,7 @@ class SyncApp:
 
     def handle_signin(self):
         """Handle Google sign-in."""
-        print("\n  Opening browser for Google sign-in...")
-        print("  (If browser doesn't open, check your terminal)")
-        print()
+        display.auth_opening_browser()
 
         if self.auth.sign_in():
             print("  Signed in successfully!")
@@ -357,8 +353,7 @@ class SyncApp:
         """
         # Require sign-in for custom folders (need OAuth to access user's Drive)
         if not self.auth.is_signed_in:
-            print("\n  Please sign in to Google first to add custom folders.")
-            print("  Custom folders require access to your Google Drive.")
+            display.auth_required_custom_folders()
             wait_with_skip(3)
             return False
 
@@ -448,16 +443,12 @@ class SyncApp:
 
         # Need user OAuth for scanning
         if not self.auth.is_signed_in:
-            print("\n  Cannot scan custom folders: not signed in to Google.")
-            print("  Sign in first to download from custom folders.")
+            display.auth_required_scan()
             wait_with_skip(3)
             return
 
         # Show scanning header
-        print()
-        print("=" * 50)
-        print("Scanning custom folders...")
-        print("=" * 50)
+        display.scan_custom_folders_header()
 
         # Create scanner with user's OAuth
         auth_token = self.auth.get_token()
@@ -469,14 +460,13 @@ class SyncApp:
             folder_id = folder.get("folder_id")
             folder_name = folder.get("name")
 
-            print(f"\n[{folder_name}]")
-            print("-" * 40)
+            display.scan_folder_header(folder_name)
 
             def progress_cb(folders_scanned, files_found, shortcuts_found, files_list=None):
                 print(f"\r  Scanning... {folders_scanned} folders, {files_found} files found", end="", flush=True)
 
             result = scanner.scan(folder_id, progress_callback=progress_cb)
-            print()  # New line after progress
+            print()
 
             if result.cancelled:
                 print("  Scan cancelled.")
@@ -503,10 +493,7 @@ class SyncApp:
 
             print(f"  Done! Found {len(result.files)} files ({format_size(folder['total_size'])})")
 
-        print()
-        print("=" * 50)
-        print("Scan complete. Starting download...")
-        print("=" * 50)
+        display.scan_complete_header()
 
     def _get_combined_drives_config(self) -> DrivesConfig:
         """Get drives config with custom folders added as a group."""

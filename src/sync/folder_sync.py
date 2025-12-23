@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Callable, Optional, Union
 
 from ..drive import DriveClient, FolderScanner
-from ..core.formatting import format_size, format_duration, format_speed, dedupe_files_by_newest
-from ..ui.primitives import print_progress, print_long_path_warning, print_section_header, print_separator, wait_with_skip
-from ..ui.primitives.colors import Colors
+from ..core.formatting import dedupe_files_by_newest
+from ..ui.primitives import print_long_path_warning, print_section_header, print_separator, wait_with_skip
+from ..ui.widgets import display
 from .cache import clear_cache, clear_folder_cache
 from .download_planner import plan_downloads
 from .purge_planner import plan_purge, find_partial_downloads
@@ -54,7 +54,6 @@ class FolderSync:
         Returns:
             Tuple of (downloaded, skipped, errors, rate_limited_file_ids, cancelled, bytes_downloaded)
         """
-        c = Colors
         folder_path = base_path / folder["name"]
         scan_start = time.time()
         disabled_prefixes = disabled_prefixes or []
@@ -87,12 +86,11 @@ class FolderSync:
                 print_long_path_warning(len(long_paths))
         else:
             # No manifest - need to scan (shouldn't happen with official folders)
-            print(f"  {c.DIM}Scanning folder...{c.RESET}")
+            display.scanning_folder()
             scanner = FolderScanner(self.client)
 
             def progress(folders, files, shortcuts):
-                shortcut_info = f", {shortcuts} shortcuts" if shortcuts else ""
-                print_progress(f"Scanning... {folders} folders, {files} files{shortcut_info}")
+                display.scan_progress(folders, files, shortcuts)
 
             files = scanner.scan_for_sync(folder["folder_id"], folder_path, progress)
             print()
@@ -108,32 +106,19 @@ class FolderSync:
             if long_paths:
                 print_long_path_warning(len(long_paths))
 
-        # Build consolidated status parts
-        status_parts = []
-
+        # Print folder status
         if not tasks and not skipped:
-            status_parts.append("no files")
-            if filtered_count > 0:
-                status_parts.append(f"{c.DIM}{filtered_count} filtered{c.RESET}")
-            print(f"  {', '.join(status_parts)}")
+            display.folder_status_empty(filtered_count)
             return 0, 0, 0, [], False, 0
 
         if not tasks:
             # All files already synced
-            status_parts.append(f"{skipped} files")
-            if filtered_count > 0:
-                status_parts.append(f"{c.DIM}{filtered_count} filtered{c.RESET}")
-            print(f"  {', '.join(status_parts)} • {c.GREEN}✓ synced{c.RESET}")
+            display.folder_status_synced(skipped, filtered_count)
             return 0, skipped, 0, [], False, 0
 
         # Files to download
         total_size = sum(t.size for t in tasks)
-        status_parts.append(f"{len(tasks)} files ({format_size(total_size)})")
-        if skipped > 0:
-            status_parts.append(f"{skipped} synced")
-        if filtered_count > 0:
-            status_parts.append(f"{c.DIM}{filtered_count} filtered{c.RESET}")
-        print(f"  {', '.join(status_parts)}")
+        display.folder_status_downloading(len(tasks), total_size, skipped, filtered_count)
 
         # Download
         download_start = time.time()
@@ -143,17 +128,7 @@ class FolderSync:
         download_time = time.time() - download_start
 
         if not cancelled:
-            # Final summary line
-            avg_speed = bytes_downloaded / download_time if download_time > 0 else 0
-            summary = f"  {c.GREEN}✓{c.RESET} {downloaded} files"
-            if bytes_downloaded > 0:
-                summary += f" ({format_size(bytes_downloaded)})"
-            summary += f" in {format_duration(download_time)}"
-            if avg_speed > 0:
-                summary += f" • {format_speed(avg_speed)}"
-            if errors > 0:
-                summary += f" • {c.RED}{errors} errors{c.RESET}"
-            print(summary)
+            display.folder_complete(downloaded, bytes_downloaded, download_time, errors)
 
         # Clear cache for this folder after download
         clear_folder_cache(folder_path)
@@ -168,7 +143,6 @@ class FolderSync:
         disabled_prefixes_map: dict[str, list[str]] = None
     ) -> bool:
         """Download folders. Returns True if cancelled."""
-        c = Colors
         download_path.mkdir(parents=True, exist_ok=True)
         disabled_prefixes_map = disabled_prefixes_map or {}
 
@@ -212,33 +186,19 @@ class FolderSync:
         print_separator()
 
         if was_cancelled:
-            summary = f"{c.DIM}Cancelled{c.RESET}"
-            if total_downloaded > 0:
-                summary += f" - {total_downloaded} files downloaded"
-            print(summary)
+            display.sync_cancelled(total_downloaded)
         elif total_downloaded > 0:
-            avg_speed = total_bytes / elapsed if elapsed > 0 else 0
-            summary = f"{c.GREEN}✓{c.RESET} {total_downloaded} files"
-            if total_bytes > 0:
-                summary += f" ({format_size(total_bytes)})"
-            summary += f" in {format_duration(elapsed)}"
-            if avg_speed > 0:
-                summary += f" • {format_speed(avg_speed)} avg"
-            print(summary)
+            display.sync_complete(total_downloaded, total_bytes, elapsed)
         else:
-            print(f"{c.GREEN}✓{c.RESET} All files synced")
+            display.sync_already_synced()
 
         if total_errors > 0:
-            print(f"  {c.RED}{total_errors} errors{c.RESET}")
+            display.sync_errors(total_errors)
         if total_rate_limited > 0:
-            print(f"  {c.DIM}{total_rate_limited} rate-limited{c.RESET}")
+            display.sync_rate_limited(total_rate_limited)
 
-        # Give guidance for rate-limited folders
         if rate_limited_folders:
-            print()
-            folder_list = ", ".join(sorted(rate_limited_folders))
-            print(f"  {c.DIM}[{folder_list}] hit Google's download limit.{c.RESET}")
-            print(f"  {c.DIM}Run sync again later, or try tomorrow (resets every 24h).{c.RESET}")
+            display.rate_limit_guidance(rate_limited_folders)
 
         # Only wait here if cancelled (no purge will follow)
         if was_cancelled:
@@ -271,8 +231,6 @@ def purge_all_folders(
     """
     from ..ui.components import format_purge_tree
 
-    c = Colors
-
     print_section_header("Purge")
 
     total_deleted = 0
@@ -296,14 +254,13 @@ def purge_all_folders(
                           for f in folder_path.rglob("*") if f.is_file()]
             if local_files:
                 folder_size = sum(size for _, size in local_files)
-                print(f"\n{c.DIM}[{folder_name}]{c.RESET} (drive disabled)")
-                print(f"  Found {c.RED}{len(local_files)}{c.RESET} files ({format_size(folder_size)})")
+                display.purge_drive_disabled(folder_name, len(local_files), folder_size)
 
                 deleted, failed = delete_files(local_files, base_path)
                 total_deleted += deleted
                 total_failed += failed
                 total_size += folder_size
-                print(f"  {c.RED}Removed {deleted} files{c.RESET}" + (f" ({failed} failed)" if failed else ""))
+                display.purge_removed(deleted, failed)
             continue
 
         # Drive is enabled - use plan_purge to get files
@@ -313,43 +270,36 @@ def purge_all_folders(
             continue
 
         folder_size = sum(size for _, size in files_to_purge)
-        print(f"\n{c.DIM}[{folder_name}]{c.RESET}")
-        print(f"  Found {c.RED}{len(files_to_purge)}{c.RESET} files to purge ({format_size(folder_size)})")
+        display.purge_folder(folder_name, len(files_to_purge), folder_size)
 
         # Show tree structure (abbreviated)
         tree_lines = format_purge_tree(files_to_purge, base_path)
-        for line in tree_lines[:5]:
-            print(f"  {line}")
-        if len(tree_lines) > 5:
-            print(f"    ... and {len(tree_lines) - 5} more folders")
+        display.purge_tree_lines(tree_lines)
 
         # Delete automatically
         deleted, failed = delete_files(files_to_purge, base_path)
         total_deleted += deleted
         total_failed += failed
         total_size += folder_size
-        print(f"  {c.RED}Removed {deleted} files{c.RESET}" + (f" ({failed} failed)" if failed else ""))
+        display.purge_removed(deleted, failed)
 
     # Clean up partial downloads at base level
     partial_files = find_partial_downloads(base_path)
     if partial_files:
         partial_size = sum(size for _, size in partial_files)
-        print(f"\n{c.DIM}[Partial Downloads]{c.RESET}")
-        print(f"  Found {c.RED}{len(partial_files)}{c.RESET} incomplete download(s) ({format_size(partial_size)})")
+        display.purge_partial_downloads(len(partial_files), partial_size)
         deleted, failed = delete_files(partial_files, base_path)
         total_deleted += deleted
         total_failed += failed
         total_size += partial_size
-        print(f"  {c.RED}Cleaned up {deleted} file(s){c.RESET}" + (f" ({failed} failed)" if failed else ""))
+        display.purge_partial_cleaned(deleted, failed)
 
     print()
     print_separator()
     if total_deleted > 0 or total_failed > 0:
-        print(f"{c.RED}✗{c.RESET} Removed {total_deleted} files ({format_size(total_size)})")
-        if total_failed > 0:
-            print(f"  {c.DIM}{total_failed} file(s) could not be deleted{c.RESET}")
+        display.purge_summary(total_deleted, total_size, total_failed)
     else:
-        print(f"{c.GREEN}✓{c.RESET} No files to purge")
+        display.purge_nothing()
 
     # Clean up sync_state entries for files that no longer exist
     if sync_state:

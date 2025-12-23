@@ -15,6 +15,7 @@ from .menu import (
 )
 from .confirm import ConfirmDialog
 from .progress import FolderProgress
+from . import sync_display as display
 
 __all__ = [
     # Menu
@@ -29,4 +30,6 @@ __all__ = [
     "ConfirmDialog",
     # Progress
     "FolderProgress",
+    # Display
+    "display",
 ]

@@ -25,7 +25,7 @@ from .extractor import extract_archive, get_folder_size, delete_video_files, sca
 from .download_planner import DownloadTask
 from .state import SyncState
 from ..ui.primitives.esc_monitor import EscMonitor
-from ..ui.widgets import FolderProgress
+from ..ui.widgets import FolderProgress, display
 
 # Large file threshold for reducing download concurrency (500MB)
 LARGE_FILE_THRESHOLD = 500_000_000
@@ -517,9 +517,7 @@ class FileDownloader:
             progress = FolderProgress(total_files=len(tasks), total_folders=0)
             progress.register_folders(tasks)
             progress.set_aggregate_totals(len(tasks), total_bytes, drive_name)
-            print(f"  Downloading {len(tasks)} files across {progress.total_charts} charts...")
-            print(f"  (max {self.max_workers} concurrent downloads, press ESC to cancel)")
-            print()
+            display.download_starting(len(tasks), progress.total_charts, self.max_workers)
 
         original_handler = None
 
@@ -562,18 +560,13 @@ class FileDownloader:
             if progress:
                 progress.close()
                 if cancelled:
-                    print(f"  Cancelled. Downloaded {downloaded} files ({progress.completed_charts} complete charts).")
                     cleaned = self._cleanup_partial_downloads(tasks)
-                    if cleaned > 0:
-                        print(f"  Cleaned up {cleaned} partial download(s).")
+                    display.download_cancelled(downloaded, progress.completed_charts, cleaned)
                 else:
                     progress.print_error_summary()
 
         if auth_failures > 0 and len(rate_limited_ids) == 0:
-            print()
-            print(f"  ⚠ {auth_failures} files failed - your sign-in may have expired.")
-            print("  Try signing out and back in, then sync again.")
-            print()
+            display.auth_expired_warning(auth_failures)
 
         bytes_downloaded = progress.downloaded_bytes if progress else 0
         return downloaded, 0, permanent_errors, rate_limited_ids, cancelled, bytes_downloaded

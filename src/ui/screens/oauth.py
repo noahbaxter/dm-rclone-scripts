@@ -4,8 +4,9 @@ OAuth prompt screen - first-run sign-in prompt.
 Explains benefits of signing in and lets user choose to sign in or skip.
 """
 
-from ..primitives import getch, clear_screen, Colors
+from ..primitives import getch, clear_screen
 from ..components import print_header
+from ..widgets import display
 
 
 class OAuthPromptScreen:
@@ -25,18 +26,7 @@ def show_oauth_prompt() -> bool:
     """
     clear_screen()
     print_header()
-    print()
-    print("  Sign in to Google for faster downloads?")
-    print()
-    print("  Signing in gives you your own download quota,")
-    print("  which means fewer rate limits and faster syncs.")
-    print()
-    print("  Your Google account is only used to download files.")
-    print("  We never upload, modify, or access anything else.")
-    print()
-    print("  [Y] Sign in (recommended)")
-    print("  [N] Skip for now")
-    print()
+    display.auth_prompt()
 
     while True:
         key = getch().lower()

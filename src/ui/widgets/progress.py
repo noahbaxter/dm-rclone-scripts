@@ -16,6 +16,7 @@ from ...core.formatting import extract_path_context
 from ...core.progress import ProgressTracker
 from ..primitives.colors import Colors
 from .active_downloads import ActiveDownloadsDisplay
+from . import sync_display as display
 
 
 @dataclass
@@ -225,9 +226,7 @@ class FolderProgress(ProgressTracker):
         if not self.errors:
             return
 
-        c = Colors
-        print()
-        print(f"{c.RED}Download errors:{c.RESET}")
+        display.download_errors_header()
 
         grouped: dict[str, list[DownloadError]] = {}
         for err in self.errors:
@@ -236,20 +235,7 @@ class FolderProgress(ProgressTracker):
 
         total = len(self.errors)
 
-        if total < 20:
-            for ctx, errs in sorted(grouped.items()):
-                print(f"  {c.DIM}[{ctx}]{c.RESET} {len(errs)} failed:")
-                for err in errs:
-                    print(f"    - {err.filename} ({err.reason})")
-        elif total < 100:
-            for ctx, errs in sorted(grouped.items()):
-                print(f"  {c.DIM}[{ctx}]{c.RESET} {len(errs)} failed:")
-                for err in errs[:3]:
-                    print(f"    - {err.filename} ({err.reason})")
-                if len(errs) > 3:
-                    print(f"    ... and {len(errs) - 3} more")
-        else:
-            for ctx, errs in sorted(grouped.items()):
-                print(f"  {c.DIM}[{ctx}]{c.RESET} {len(errs)} failed")
+        for ctx, errs in sorted(grouped.items()):
+            display.download_errors_context(ctx, errs, show_all=(total < 20))
 
         print()
