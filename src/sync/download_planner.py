@@ -18,6 +18,28 @@ from .state import SyncState
 WINDOWS_MAX_PATH = 260
 
 
+def is_long_paths_enabled() -> bool:
+    """Check if Windows long paths are enabled in registry."""
+    if os.name != 'nt':
+        return True
+    try:
+        import winreg
+        key = winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\FileSystem"
+        )
+        value, _ = winreg.QueryValueEx(key, "LongPathsEnabled")
+        winreg.CloseKey(key)
+        return value == 1
+    except (OSError, FileNotFoundError):
+        return False
+
+
+def exceeds_windows_path_limit(path: Path) -> bool:
+    """Check if path exceeds Windows MAX_PATH and long paths aren't enabled."""
+    return os.name == 'nt' and not is_long_paths_enabled() and len(str(path)) >= WINDOWS_MAX_PATH
+
+
 @dataclass
 class DownloadTask:
     """A file to be downloaded."""
@@ -61,7 +83,6 @@ def plan_downloads(
     to_download = []
     skipped = 0
     long_paths = []
-    is_windows = os.name == 'nt'
 
     for f in files:
         # Sanitize path for Windows-illegal characters (*, ?, ", <, >, |, :)
@@ -79,62 +100,46 @@ def plan_downloads(
             skipped += 1
             continue
 
-        if is_archive_file(file_name):
-            # Archive file: check if synced via sync_state
-            local_path = local_base / file_path
-            chart_folder = local_path.parent
+        is_archive = is_archive_file(file_name)
+        local_path = local_base / file_path
 
-            # Check for long path on Windows
-            download_path = chart_folder / f"_download_{file_name}"
-            if is_windows and len(str(download_path)) >= WINDOWS_MAX_PATH:
-                long_paths.append(file_path)
+        # Archives download to temp path, regular files download directly
+        if is_archive:
+            download_path = local_path.parent / f"_download_{file_name}"
+        else:
+            download_path = local_path
+            # Skip video files if delete_videos is enabled
+            if delete_videos and Path(file_name).suffix.lower() in VIDEO_EXTENSIONS:
+                skipped += 1
                 continue
 
+        # Check for long path on Windows (only if long paths not enabled)
+        if exceeds_windows_path_limit(download_path):
+            long_paths.append(file_path)
+            continue
+
+        # Check if already synced
+        if is_archive:
             is_synced = False
             if sync_state and sync_state.is_archive_synced(rel_path, file_md5):
                 # Also verify extracted files still exist
                 archive_files = sync_state.get_archive_files(rel_path)
                 missing = sync_state.check_files_exist(archive_files)
                 is_synced = len(missing) == 0
-
-            if is_synced:
-                skipped += 1
-            else:
-                # Need to download and extract
-                to_download.append(DownloadTask(
-                    file_id=f["id"],
-                    local_path=download_path,
-                    size=file_size,
-                    md5=file_md5,
-                    is_archive=True,
-                    rel_path=rel_path,
-                ))
         else:
-            # Regular file: check if exists with matching size
-            local_path = local_base / file_path
-
-            # Skip video files if delete_videos is enabled
-            if delete_videos and Path(file_name).suffix.lower() in VIDEO_EXTENSIONS:
-                skipped += 1
-                continue
-
-            # Check for long path on Windows
-            if is_windows and len(str(local_path)) >= WINDOWS_MAX_PATH:
-                long_paths.append(file_path)
-                continue
-
-            # Always verify file exists on disk (sync_state can get out of sync)
             is_synced = file_exists_with_size(local_path, file_size)
 
-            if is_synced:
-                skipped += 1
-            else:
-                to_download.append(DownloadTask(
-                    file_id=f["id"],
-                    local_path=local_path,
-                    size=file_size,
-                    md5=file_md5,
-                    rel_path=rel_path,
-                ))
+        # Add to download list or skip
+        if is_synced:
+            skipped += 1
+        else:
+            to_download.append(DownloadTask(
+                file_id=f["id"],
+                local_path=download_path,
+                size=file_size,
+                md5=file_md5,
+                is_archive=is_archive,
+                rel_path=rel_path,
+            ))
 
     return to_download, skipped, long_paths

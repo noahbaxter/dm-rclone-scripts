@@ -59,7 +59,8 @@ def print_long_path_warning(count: int):
     print(f"  WARNING: {count} files skipped due to path length > 260 chars")
     print(f"  To fix: Enable long paths in Windows Registry:")
     print(f"    HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\FileSystem")
-    print(f"    Set LongPathsEnabled to 1, then restart")
+    print(f"    Set LongPathsEnabled to 1")
+    print(f"  IMPORTANT: You must restart your computer after changing this setting!")
 
 
 SECTION_WIDTH = 50

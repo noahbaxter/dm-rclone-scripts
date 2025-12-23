@@ -452,9 +452,12 @@ class TestPlanDownloadsLongPaths:
         with tempfile.TemporaryDirectory() as tmpdir:
             yield Path(tmpdir)
 
-    def test_long_path_reported_on_windows(self, temp_dir, monkeypatch):
-        """Paths exceeding 260 chars on Windows are skipped and reported."""
+    def test_long_path_skipped_when_not_enabled(self, temp_dir, monkeypatch):
+        """Paths exceeding 260 chars on Windows are skipped when long paths not enabled."""
         monkeypatch.setattr("os.name", "nt")
+        # Simulate long paths NOT enabled in registry
+        import src.sync.download_planner as dp
+        monkeypatch.setattr(dp, "is_long_paths_enabled", lambda: False)
 
         # Create a path that will exceed 260 chars
         long_folder = "A" * 200
@@ -464,6 +467,22 @@ class TestPlanDownloadsLongPaths:
         # Should be skipped due to long path
         assert len(tasks) == 0
         assert len(long_paths) == 1
+
+    def test_long_path_allowed_when_enabled(self, temp_dir, monkeypatch):
+        """Paths exceeding 260 chars on Windows are allowed when long paths enabled."""
+        monkeypatch.setattr("os.name", "nt")
+        # Simulate long paths ENABLED in registry
+        import src.sync.download_planner as dp
+        monkeypatch.setattr(dp, "is_long_paths_enabled", lambda: True)
+
+        # Create a path that will exceed 260 chars
+        long_folder = "A" * 200
+        files = [{"id": "1", "path": f"{long_folder}/chart.7z", "size": 1000, "md5": "abc"}]
+        tasks, skipped, long_paths = plan_downloads(files, temp_dir)
+
+        # Should NOT be skipped - long paths are enabled
+        assert len(tasks) == 1
+        assert len(long_paths) == 0
 
     def test_long_path_not_checked_on_unix(self, temp_dir, monkeypatch):
         """Long paths are not checked on non-Windows systems."""
