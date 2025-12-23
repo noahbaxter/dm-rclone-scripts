@@ -24,8 +24,8 @@ manifest.json
 .vscode/
 .idea/
 
-# Claude worklog
-.claude/worklog.md
+# Claude session files
+.claude/
 
 # App data (user settings, tokens, cached manifest)
 .dm-sync/
