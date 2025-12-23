@@ -131,6 +131,24 @@ def parent_posix(path: Union[str, Path]) -> str:
 
 
 # ============================================================================
+# Path context extraction
+# ============================================================================
+
+def extract_path_context(rel_path: str | None) -> str:
+    """
+    Extract setlist context from a relative path.
+
+    Example: "DriveName/Setlist/folder/file.zip" -> "Setlist"
+    """
+    if not rel_path:
+        return ""
+    parts = rel_path.split("/")
+    if len(parts) >= 2:
+        return parts[1]
+    return parts[0] if parts else ""
+
+
+# ============================================================================
 # Size and duration formatting
 # ============================================================================
 
@@ -151,6 +169,24 @@ def format_duration(seconds: float) -> str:
         return f"{int(seconds // 60)}m {int(seconds % 60)}s"
     else:
         return f"{int(seconds // 3600)}h {int((seconds % 3600) // 60)}m"
+
+
+def format_speed(bytes_per_sec: float) -> str:
+    """Format bytes per second as human readable speed."""
+    if bytes_per_sec < 1024:
+        return f"{bytes_per_sec:.0f} B/s"
+    elif bytes_per_sec < 1024 * 1024:
+        return f"{bytes_per_sec / 1024:.1f} KB/s"
+    else:
+        return f"{bytes_per_sec / (1024 * 1024):.1f} MB/s"
+
+
+def format_download_name(local_path: Path) -> str:
+    """Format a download path for display (parent/filename, strips temp prefix)."""
+    filename = local_path.name
+    if filename.startswith("_download_"):
+        filename = filename[10:]
+    return f"{local_path.parent.name}/{filename}"
 
 
 # ============================================================================

@@ -225,12 +225,12 @@ class TestPlanDownloadsRegularFiles:
         assert len(tasks) == 0
         assert skipped == 1
 
-    def test_sync_state_trusted_without_disk_verification(self, temp_dir):
+    def test_disk_always_verified_even_with_sync_state(self, temp_dir):
         """
-        sync_state is trusted for performance - no disk verification when it says synced.
+        Disk is always verified - sync_state is not blindly trusted for regular files.
 
-        This is a critical optimization for HDDs with 100k+ files where random stat()
-        calls would be extremely slow.
+        sync_state can become stale (user modifies files, disk corruption, etc.)
+        so we always verify file existence and size on disk.
         """
         # Create file on disk with DIFFERENT size than manifest
         local_file = temp_dir / "folder" / "song.ini"
@@ -248,9 +248,10 @@ class TestPlanDownloadsRegularFiles:
             files, temp_dir, sync_state=sync_state, folder_name="TestDrive"
         )
 
-        # sync_state is trusted - file is skipped even though disk differs
-        assert len(tasks) == 0, "sync_state should be trusted without disk verification"
-        assert skipped == 1
+        # Disk is always verified - sync_state is NOT trusted for regular files
+        # File has wrong size on disk, so it needs to be downloaded
+        assert len(tasks) == 1, "disk should always be verified"
+        assert skipped == 0
 
 
 class TestPlanDownloadsMigration:
@@ -503,6 +504,97 @@ class TestDownloadTaskDataclass:
         assert task.md5 == "abc123"
         assert task.is_archive is True
         assert task.rel_path == "TestDrive/folder/file.7z"
+
+
+class TestCleanupPartialDownloads:
+    """Tests for FileDownloader._cleanup_partial_downloads."""
+
+    @pytest.fixture
+    def temp_dir(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield Path(tmpdir)
+
+    def test_cleans_download_prefix_files(self, temp_dir):
+        """Archive files with _download_ prefix are deleted."""
+        from src.sync.downloader import FileDownloader
+
+        # Create partial download file
+        chart_folder = temp_dir / "Setlist" / "ChartFolder"
+        chart_folder.mkdir(parents=True)
+        partial = chart_folder / "_download_chart.7z"
+        partial.write_bytes(b"partial data")
+
+        task = DownloadTask(
+            file_id="123",
+            local_path=partial,
+            is_archive=True,
+        )
+
+        downloader = FileDownloader()
+        cleaned = downloader._cleanup_partial_downloads([task])
+
+        assert cleaned == 1
+        assert not partial.exists()
+
+    def test_cleans_renamed_archive_files(self, temp_dir):
+        """Archive files renamed (prefix removed) are also deleted."""
+        from src.sync.downloader import FileDownloader
+
+        chart_folder = temp_dir / "Setlist" / "ChartFolder"
+        chart_folder.mkdir(parents=True)
+
+        # Create both the _download_ version and the renamed version
+        partial = chart_folder / "_download_chart.7z"
+        renamed = chart_folder / "chart.7z"
+        partial.write_bytes(b"partial")
+        renamed.write_bytes(b"renamed")
+
+        task = DownloadTask(
+            file_id="123",
+            local_path=partial,
+            is_archive=True,
+        )
+
+        downloader = FileDownloader()
+        cleaned = downloader._cleanup_partial_downloads([task])
+
+        assert cleaned == 2
+        assert not partial.exists()
+        assert not renamed.exists()
+
+    def test_ignores_non_archive_tasks(self, temp_dir):
+        """Non-archive tasks are not cleaned up."""
+        from src.sync.downloader import FileDownloader
+
+        file_path = temp_dir / "song.ini"
+        file_path.write_text("[song]")
+
+        task = DownloadTask(
+            file_id="123",
+            local_path=file_path,
+            is_archive=False,
+        )
+
+        downloader = FileDownloader()
+        cleaned = downloader._cleanup_partial_downloads([task])
+
+        assert cleaned == 0
+        assert file_path.exists()
+
+    def test_ignores_missing_files(self, temp_dir):
+        """Missing files don't cause errors."""
+        from src.sync.downloader import FileDownloader
+
+        task = DownloadTask(
+            file_id="123",
+            local_path=temp_dir / "_download_missing.7z",
+            is_archive=True,
+        )
+
+        downloader = FileDownloader()
+        cleaned = downloader._cleanup_partial_downloads([task])
+
+        assert cleaned == 0
 
 
 if __name__ == "__main__":

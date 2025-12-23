@@ -151,9 +151,13 @@ class SyncApp:
         disabled_map = self._get_disabled_subfolders_for_folders(enabled_indices)
 
         # Step 1: Download missing files
-        self.sync.download_folders(self.folders, enabled_indices, get_download_path(), disabled_map)
+        was_cancelled = self.sync.download_folders(self.folders, enabled_indices, get_download_path(), disabled_map)
         clear_scan_cache()  # Invalidate filesystem cache after download
         self.folder_stats_cache.invalidate_all()  # Invalidate all folder stats
+
+        # If cancelled, don't purge - just return (wait already happened in download_folders)
+        if was_cancelled:
+            return
 
         # Step 2: Purge extra files (no confirmation - sync means make it match)
         stats = count_purgeable_detailed(
@@ -161,29 +165,13 @@ class SyncApp:
         )
 
         if stats.total_files > 0:
-            print()
-            print("=" * 50)
-            print("Cleaning up extra files...")
-            print("=" * 50)
-
-            # Build summary of what's being purged
-            parts = []
-            if stats.chart_count > 0:
-                parts.append(f"{stats.chart_count} chart files ({format_size(stats.chart_size)})")
-            if stats.extra_file_count > 0:
-                parts.append(f"{stats.extra_file_count} extra files ({format_size(stats.extra_file_size)})")
-            if stats.partial_count > 0:
-                parts.append(f"{stats.partial_count} partial downloads ({format_size(stats.partial_size)})")
-
-            print(f"Removing: {', '.join(parts)}")
-
             purge_all_folders(self.folders, get_download_path(), self.user_settings, self.sync_state)
             clear_scan_cache()  # Invalidate filesystem cache after purge
             self.folder_stats_cache.invalidate_all()  # Invalidate all folder stats
 
-            print("Cleanup complete.")
-        else:
-            print("\nSync complete - no extra files to clean up.")
+        # Always wait before returning to menu
+        from src.ui.primitives import wait_with_skip
+        wait_with_skip(5, "Continuing in 5s (press any key to skip)")
 
     def handle_configure_drive(self, folder_id: str):
         """Configure setlists for a specific drive, or show options for custom folders."""

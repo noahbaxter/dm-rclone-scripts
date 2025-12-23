@@ -10,6 +10,10 @@ from .terminal import (
     get_terminal_width,
     print_progress,
     print_long_path_warning,
+    print_section_header,
+    print_separator,
+    make_separator,
+    SECTION_WIDTH,
 )
 from .keyboard_input import (
     CancelInput,
@@ -49,6 +53,10 @@ __all__ = [
     "get_terminal_width",
     "print_progress",
     "print_long_path_warning",
+    "print_section_header",
+    "print_separator",
+    "make_separator",
+    "SECTION_WIDTH",
     # Keyboard input
     "CancelInput",
     "raw_terminal",

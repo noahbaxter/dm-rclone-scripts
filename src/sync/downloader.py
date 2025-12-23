@@ -17,82 +17,23 @@ from typing import Callable, Optional, Tuple, List, Union
 from dataclasses import dataclass
 
 import aiohttp
-import certifi
 
 from ..core.constants import VIDEO_EXTENSIONS
-from ..core.paths import get_extract_tmp_dir
+from ..core.formatting import extract_path_context, format_download_name
+from ..core.paths import get_extract_tmp_dir, get_certifi_ssl_context
 from .extractor import extract_archive, get_folder_size, delete_video_files, scan_extracted_files
 from .download_planner import DownloadTask
 from .state import SyncState
+from ..ui.primitives.esc_monitor import EscMonitor
 from ..ui.widgets import FolderProgress
 
 # Large file threshold for reducing download concurrency (500MB)
 LARGE_FILE_THRESHOLD = 500_000_000
 
-
-def get_certifi_path() -> str:
-    """Get path to certifi CA bundle, handling PyInstaller bundles."""
-    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-        bundled_cert = os.path.join(sys._MEIPASS, 'certifi', 'cacert.pem')
-        if os.path.exists(bundled_cert):
-            return bundled_cert
-    return certifi.where()
-
-
-# Platform-specific imports for ESC detection
-if os.name == 'nt':
-    import msvcrt
-else:
-    import termios
-    import tty
-    import select
-
-
-class EscMonitor:
-    """Background thread that monitors for ESC key presses."""
-
-    def __init__(self, on_esc: Callable[[], None]):
-        self.on_esc = on_esc
-        self._stop = threading.Event()
-        self._thread = None
-        self._old_settings = None
-
-    def start(self):
-        """Start monitoring for ESC."""
-        self._thread = threading.Thread(target=self._monitor, daemon=True)
-        self._thread.start()
-
-    def stop(self):
-        """Stop monitoring."""
-        self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=0.5)
-
-    def _monitor(self):
-        """Monitor loop - checks for ESC key."""
-        if os.name == 'nt':
-            while not self._stop.is_set():
-                if msvcrt.kbhit():
-                    ch = msvcrt.getch()
-                    if ch == b'\x1b':  # ESC
-                        self.on_esc()
-                        return
-                time.sleep(0.05)
-        else:
-            fd = sys.stdin.fileno()
-            try:
-                self._old_settings = termios.tcgetattr(fd)
-                tty.setcbreak(fd)
-
-                while not self._stop.is_set():
-                    if select.select([sys.stdin], [], [], 0.05)[0]:
-                        ch = sys.stdin.read(1)
-                        if ch == '\x1b':  # ESC
-                            self.on_esc()
-                            return
-            finally:
-                if self._old_settings:
-                    termios.tcsetattr(fd, termios.TCSADRAIN, self._old_settings)
+# Progress tracking thresholds
+PROGRESS_TRACK_MIN_SIZE = 512 * 1024  # 512KB - minimum size to show in active downloads
+PROGRESS_TRACK_DELAY = 0.5  # Seconds to wait before showing in active downloads
+PROGRESS_UPDATE_INTERVAL = 0.3  # Seconds between progress updates
 
 
 @dataclass
@@ -145,9 +86,7 @@ class FileDownloader:
         progress_tracker: Optional[FolderProgress] = None,
     ) -> DownloadResult:
         """Download a single file with retries (async)."""
-        display_name = task.local_path.name
-        if display_name.startswith("_download_"):
-            display_name = display_name[10:]
+        display_name = format_download_name(task.local_path)
 
         async with semaphore:
             for attempt in range(self.max_retries):
@@ -272,21 +211,20 @@ class FileDownloader:
         downloaded_bytes = 0
         content_length = response.content_length or 0
 
-        if content_length > 0 and content_length < 1024 * 1024:
+        # Small files: read all at once
+        if content_length > 0 and content_length < PROGRESS_TRACK_MIN_SIZE:
             data = await response.read()
             with open(task.local_path, "wb") as f:
                 f.write(data)
             downloaded_bytes = len(data)
         else:
+            # Large files: stream with progress tracking
             total_size = task.size if task.size > 0 else content_length
+            display_name = format_download_name(task.local_path)
+            path_context = extract_path_context(task.rel_path)
+            is_tracked = False
             download_start = time.time()
-            last_progress_time = download_start
-            progress_interval = 1.5
-            time_threshold = 2.0
-
-            display_name = task.local_path.name
-            if display_name.startswith("_download_"):
-                display_name = display_name[10:]
+            last_update = download_start
 
             with open(task.local_path, "wb") as f:
                 async for chunk in response.content.iter_chunked(self.chunk_size):
@@ -294,15 +232,25 @@ class FileDownloader:
                         f.write(chunk)
                         downloaded_bytes += len(chunk)
 
-                        if progress_tracker:
+                        if progress_tracker and total_size > PROGRESS_TRACK_MIN_SIZE:
                             now = time.time()
                             elapsed = now - download_start
-                            if elapsed >= time_threshold and now - last_progress_time >= progress_interval:
-                                last_progress_time = now
-                                pct = (downloaded_bytes / total_size * 100) if total_size > 0 else 0
-                                size_mb = downloaded_bytes / (1024 * 1024)
-                                total_mb = total_size / (1024 * 1024)
-                                progress_tracker.write(f"  ↓ {display_name}: {size_mb:.0f}/{total_mb:.0f} MB ({pct:.0f}%)")
+
+                            # Register for tracking after delay
+                            if not is_tracked and elapsed >= PROGRESS_TRACK_DELAY:
+                                progress_tracker.register_active_download(
+                                    task.file_id, display_name, path_context, total_size
+                                )
+                                is_tracked = True
+
+                            # Update progress periodically
+                            if is_tracked and now - last_update >= PROGRESS_UPDATE_INTERVAL:
+                                last_update = now
+                                progress_tracker.update_active_download(task.file_id, downloaded_bytes)
+
+            # Unregister when done
+            if is_tracked and progress_tracker:
+                progress_tracker.unregister_active_download(task.file_id)
 
         return DownloadResult(
             success=True,
@@ -444,7 +392,7 @@ class FileDownloader:
                 success, error, _ = self.process_archive(task, sync_state, task.rel_path)
                 return success, error
 
-        ssl_context = ssl.create_default_context(cafile=get_certifi_path())
+        ssl_context = ssl.create_default_context(cafile=get_certifi_ssl_context())
 
         connector = aiohttp.TCPConnector(
             limit=effective_workers * 2,
@@ -490,6 +438,8 @@ class FileDownloader:
                                 progress.file_completed(task.local_path)
                             continue
 
+                        path_context = extract_path_context(task.rel_path)
+
                         if result.success:
                             if task.is_archive:
                                 archive_success, archive_error = await loop.run_in_executor(
@@ -499,16 +449,18 @@ class FileDownloader:
                                     errors += 1
                                     if progress:
                                         progress.file_completed(task.local_path)
-                                        progress.write(f"  ERR: {task.local_path.parent.name} - {archive_error}")
+                                        progress.print_error(path_context, f"extract: {task.local_path.parent.name} - {archive_error}")
                                     continue
 
                                 if progress:
                                     archive_name = task.local_path.name
                                     if archive_name.startswith("_download_"):
                                         archive_name = archive_name[10:]
-                                    progress.archive_completed(task.local_path, archive_name)
+                                    progress.archive_completed(task.local_path, archive_name, path_context)
 
                             downloaded += 1
+                            if progress and result.bytes_downloaded > 0:
+                                progress.add_downloaded_bytes(result.bytes_downloaded)
 
                             # Track direct files in sync state
                             if not task.is_archive and sync_state and task.rel_path:
@@ -519,8 +471,8 @@ class FileDownloader:
                                 if not task.is_archive:
                                     completed_info = progress.file_completed(result.file_path)
                                     if completed_info:
-                                        folder_name, is_chart = completed_info
-                                        progress.print_folder_complete(folder_name, is_chart)
+                                        folder_name, is_chart, ctx = completed_info
+                                        progress.print_folder_complete(folder_name, is_chart, ctx)
                                 else:
                                     progress.file_completed(result.file_path)
                         else:
@@ -531,7 +483,7 @@ class FileDownloader:
                                 retryable_tasks.append(task)
                             if progress:
                                 progress.file_completed(result.file_path)
-                                progress.write(f"  {result.message}")
+                                progress.print_error(path_context, result.message)
 
                         if progress_callback:
                             progress_callback(result)
@@ -549,19 +501,22 @@ class FileDownloader:
         progress_callback: Optional[Callable[[DownloadResult], None]] = None,
         show_progress: bool = True,
         sync_state: Optional[SyncState] = None,
-    ) -> Tuple[int, int, int, List[str], bool]:
+        drive_name: str = "",
+    ) -> Tuple[int, int, int, List[str], bool, int]:
         """Download multiple files concurrently using asyncio.
 
         Returns:
-            Tuple of (downloaded, skipped, errors, rate_limited_file_ids, cancelled)
+            Tuple of (downloaded, skipped, errors, rate_limited_file_ids, cancelled, bytes_downloaded)
         """
         if not tasks:
-            return 0, 0, 0, [], False
+            return 0, 0, 0, [], False, 0
 
         progress = None
         if show_progress:
+            total_bytes = sum(t.size for t in tasks)
             progress = FolderProgress(total_files=len(tasks), total_folders=0)
             progress.register_folders(tasks)
+            progress.set_aggregate_totals(len(tasks), total_bytes, drive_name)
             print(f"  Downloading {len(tasks)} files across {progress.total_charts} charts...")
             print(f"  (max {self.max_workers} concurrent downloads, press ESC to cancel)")
             print()
@@ -611,6 +566,8 @@ class FileDownloader:
                     cleaned = self._cleanup_partial_downloads(tasks)
                     if cleaned > 0:
                         print(f"  Cleaned up {cleaned} partial download(s).")
+                else:
+                    progress.print_error_summary()
 
         if auth_failures > 0 and len(rate_limited_ids) == 0:
             print()
@@ -618,4 +575,5 @@ class FileDownloader:
             print("  Try signing out and back in, then sync again.")
             print()
 
-        return downloaded, 0, permanent_errors, rate_limited_ids, cancelled
+        bytes_downloaded = progress.downloaded_bytes if progress else 0
+        return downloaded, 0, permanent_errors, rate_limited_ids, cancelled, bytes_downloaded

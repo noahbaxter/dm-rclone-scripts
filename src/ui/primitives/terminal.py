@@ -60,3 +60,25 @@ def print_long_path_warning(count: int):
     print(f"  To fix: Enable long paths in Windows Registry:")
     print(f"    HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\FileSystem")
     print(f"    Set LongPathsEnabled to 1, then restart")
+
+
+SECTION_WIDTH = 50
+
+
+def print_section_header(name: str, width: int = SECTION_WIDTH):
+    """Print a styled section header using box-drawing characters."""
+    from .colors import Colors
+    c = Colors
+    header = f"━━━ {name} "
+    header += "━" * max(5, width - len(header))
+    print(f"\n{c.BOLD}{header}{c.RESET}")
+
+
+def make_separator(char: str = "━", width: int = SECTION_WIDTH) -> str:
+    """Create a horizontal separator line string."""
+    return char * width
+
+
+def print_separator(char: str = "━", width: int = SECTION_WIDTH):
+    """Print a horizontal separator line."""
+    print(make_separator(char, width))

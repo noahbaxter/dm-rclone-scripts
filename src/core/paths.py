@@ -17,6 +17,16 @@ Directory structure:
 import sys
 from pathlib import Path
 
+import certifi
+
+
+def get_certifi_ssl_context() -> str:
+    """Get path to certifi CA bundle, handling PyInstaller bundles."""
+    if getattr(sys, "frozen", False):
+        # PyInstaller bundles certifi's cacert.pem
+        return str(Path(sys._MEIPASS) / "certifi" / "cacert.pem")
+    return certifi.where()
+
 
 # Directory name for app data (hidden on Unix)
 DATA_DIR_NAME = ".dm-sync"

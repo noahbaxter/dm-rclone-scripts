@@ -123,11 +123,8 @@ def plan_downloads(
                 long_paths.append(file_path)
                 continue
 
-            # Check sync_state first (O(1) hash lookup), fall back to disk
-            if sync_state and sync_state.is_file_synced(rel_path, file_size):
-                is_synced = True
-            else:
-                is_synced = file_exists_with_size(local_path, file_size)
+            # Always verify file exists on disk (sync_state can get out of sync)
+            is_synced = file_exists_with_size(local_path, file_size)
 
             if is_synced:
                 skipped += 1

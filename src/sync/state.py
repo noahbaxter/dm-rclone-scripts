@@ -317,3 +317,31 @@ class SyncState:
                 pass
 
         return deleted
+
+    def cleanup_orphaned_entries(self) -> int:
+        """
+        Remove sync_state entries for files that don't exist on disk.
+
+        Call after purge to ensure sync_state matches filesystem reality.
+
+        Note: This only works for standalone files. Archive children can't be
+        individually removed - use remove_archive() to remove entire archives.
+
+        Returns:
+            Number of orphaned entries actually removed
+        """
+        # Check all tracked files against disk
+        missing = self.check_files_exist(verify_sizes=False)
+        if not missing:
+            return 0
+
+        # Remove each missing entry, counting successes
+        removed = 0
+        for path in missing:
+            if self._remove_path(path):
+                removed += 1
+
+        # Rebuild cache once at the end if anything was removed
+        if removed > 0:
+            self._rebuild_cache()
+        return removed
